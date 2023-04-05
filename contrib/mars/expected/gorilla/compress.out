@@ -1,0 +1,672 @@
+-- Tests for gorilla compression.
+-- start_ignore
+create extension if not exists matrixts;
+create extension if not exists mars;
+-- end_ignore
+-- on seg0 only.
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+\set f4_agg_funcs 'count(*) as f4count, min(f4) as f4min, max(f4) as f4max, avg(f4) as f4avg, sum(f4) as f4sum'
+\set f8_agg_funcs 'count(*) as f8count, min(f8) as f8min, max(f8) as f8max, avg(f8) as f8avg, sum(f8) as f8sum'
+-- lz4 compress
+\set compress lz4
+\set tname gorilla_marsscan_:compress
+set mars.enable_customscan to on;
+\i sql/gorilla/with_compress.template
+CREATE TABLE :tname
+(batch int,
+ ts timestamp,
+ f4 float4 ENCODING (compresstype=:compress),
+ f8 float  ENCODING (compresstype=:compress) )
+USING mars
+WITH (group_col_ = "{batch}", group_param_col_ = "{ts in 1 day}")
+DISTRIBUTED by (batch);
+CREATE TABLE heap_:tname
+(batch int,
+ ts timestamp,
+ f4 float4,
+ f8 float8)
+DISTRIBUTED by (batch);
+INSERT INTO heap_:tname VALUES
+  (0, '2020-10-10 09:01:02'::timestamp, null, null),
+  (0, '2020-10-10 09:01:03'::timestamp, null, null),
+  (0, '2020-10-10 09:01:04'::timestamp, null, null),
+  (0, '2020-10-10 09:01:05'::timestamp, null, null)
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT batch, f4, f8 FROM :tname;
+ batch | f4 | f8 
+-------+----+----
+     0 |    |   
+     0 |    |   
+     0 |    |   
+     0 |    |   
+(4 rows)
+
+SELECT
+ batch, :f4_agg_funcs, :f8_agg_funcs
+FROM :tname
+GROUP BY batch;
+ batch | f4count | f4min | f4max | f4avg | f4sum | f8count | f8min | f8max | f8avg | f8sum 
+-------+---------+-------+-------+-------+-------+---------+-------+-------+-------+-------
+     0 |       4 |       |       |       |       |       4 |       |       |       |      
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        i/1025, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', null, null
+    FROM
+    generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        i%2, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', null, null
+    FROM
+    generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        1, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', i / 103::float4, i / 101::float8
+    FROM
+        generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        1 ,
+        '2020-10-10 09:01:02'::timestamp + i * interval '1 second',
+        CASE
+            WHEN i%2=1 THEN null
+            ELSE i/103::float4
+        END,
+        CASE
+            WHEN i%3=1 THEN null
+        ELSE i/101::float8
+        END
+    FROM
+        generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT batch, f4, f8 FROM :tname LIMIT 11;
+ batch |     f4      |          f8          
+-------+-------------+----------------------
+     1 |             |                     
+     1 | 0.019417476 | 0.019801980198019802
+     1 |             |   0.0297029702970297
+     1 |  0.03883495 |                     
+     1 |             |  0.04950495049504951
+     1 | 0.058252428 |   0.0594059405940594
+     1 |             |                     
+     1 |   0.0776699 |  0.07920792079207921
+     1 |             |   0.0891089108910891
+     1 | 0.097087376 |                     
+     1 |             |  0.10891089108910891
+(11 rows)
+
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+\set tname gorilla_noscan_:compress
+set mars.enable_customscan to off;
+\i sql/gorilla/with_compress.template
+CREATE TABLE :tname
+(batch int,
+ ts timestamp,
+ f4 float4 ENCODING (compresstype=:compress),
+ f8 float  ENCODING (compresstype=:compress) )
+USING mars
+WITH (group_col_ = "{batch}", group_param_col_ = "{ts in 1 day}")
+DISTRIBUTED by (batch);
+CREATE TABLE heap_:tname
+(batch int,
+ ts timestamp,
+ f4 float4,
+ f8 float8)
+DISTRIBUTED by (batch);
+INSERT INTO heap_:tname VALUES
+  (0, '2020-10-10 09:01:02'::timestamp, null, null),
+  (0, '2020-10-10 09:01:03'::timestamp, null, null),
+  (0, '2020-10-10 09:01:04'::timestamp, null, null),
+  (0, '2020-10-10 09:01:05'::timestamp, null, null)
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT batch, f4, f8 FROM :tname;
+ batch | f4 | f8 
+-------+----+----
+     0 |    |   
+     0 |    |   
+     0 |    |   
+     0 |    |   
+(4 rows)
+
+SELECT
+ batch, :f4_agg_funcs, :f8_agg_funcs
+FROM :tname
+GROUP BY batch;
+ batch | f4count | f4min | f4max | f4avg | f4sum | f8count | f8min | f8max | f8avg | f8sum 
+-------+---------+-------+-------+-------+-------+---------+-------+-------+-------+-------
+     0 |       4 |       |       |       |       |       4 |       |       |       |      
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        i/1025, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', null, null
+    FROM
+    generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        i%2, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', null, null
+    FROM
+    generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        1, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', i / 103::float4, i / 101::float8
+    FROM
+        generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        1 ,
+        '2020-10-10 09:01:02'::timestamp + i * interval '1 second',
+        CASE
+            WHEN i%2=1 THEN null
+            ELSE i/103::float4
+        END,
+        CASE
+            WHEN i%3=1 THEN null
+        ELSE i/101::float8
+        END
+    FROM
+        generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT batch, f4, f8 FROM :tname LIMIT 11;
+ batch |     f4      |          f8          
+-------+-------------+----------------------
+     1 |             |                     
+     1 | 0.019417476 | 0.019801980198019802
+     1 |             |   0.0297029702970297
+     1 |  0.03883495 |                     
+     1 |             |  0.04950495049504951
+     1 | 0.058252428 |   0.0594059405940594
+     1 |             |                     
+     1 |   0.0776699 |  0.07920792079207921
+     1 |             |   0.0891089108910891
+     1 | 0.097087376 |                     
+     1 |             |  0.10891089108910891
+(11 rows)
+
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+-- zstd compress
+\set compress zstd
+\set tname gorilla_marsscan_:compress
+set mars.enable_customscan to on;
+\i sql/gorilla/with_compress.template
+CREATE TABLE :tname
+(batch int,
+ ts timestamp,
+ f4 float4 ENCODING (compresstype=:compress),
+ f8 float  ENCODING (compresstype=:compress) )
+USING mars
+WITH (group_col_ = "{batch}", group_param_col_ = "{ts in 1 day}")
+DISTRIBUTED by (batch);
+CREATE TABLE heap_:tname
+(batch int,
+ ts timestamp,
+ f4 float4,
+ f8 float8)
+DISTRIBUTED by (batch);
+INSERT INTO heap_:tname VALUES
+  (0, '2020-10-10 09:01:02'::timestamp, null, null),
+  (0, '2020-10-10 09:01:03'::timestamp, null, null),
+  (0, '2020-10-10 09:01:04'::timestamp, null, null),
+  (0, '2020-10-10 09:01:05'::timestamp, null, null)
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT batch, f4, f8 FROM :tname;
+ batch | f4 | f8 
+-------+----+----
+     0 |    |   
+     0 |    |   
+     0 |    |   
+     0 |    |   
+(4 rows)
+
+SELECT
+ batch, :f4_agg_funcs, :f8_agg_funcs
+FROM :tname
+GROUP BY batch;
+ batch | f4count | f4min | f4max | f4avg | f4sum | f8count | f8min | f8max | f8avg | f8sum 
+-------+---------+-------+-------+-------+-------+---------+-------+-------+-------+-------
+     0 |       4 |       |       |       |       |       4 |       |       |       |      
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        i/1025, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', null, null
+    FROM
+    generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        i%2, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', null, null
+    FROM
+    generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        1, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', i / 103::float4, i / 101::float8
+    FROM
+        generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        1 ,
+        '2020-10-10 09:01:02'::timestamp + i * interval '1 second',
+        CASE
+            WHEN i%2=1 THEN null
+            ELSE i/103::float4
+        END,
+        CASE
+            WHEN i%3=1 THEN null
+        ELSE i/101::float8
+        END
+    FROM
+        generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT batch, f4, f8 FROM :tname LIMIT 11;
+ batch |     f4      |          f8          
+-------+-------------+----------------------
+     1 |             |                     
+     1 | 0.019417476 | 0.019801980198019802
+     1 |             |   0.0297029702970297
+     1 |  0.03883495 |                     
+     1 |             |  0.04950495049504951
+     1 | 0.058252428 |   0.0594059405940594
+     1 |             |                     
+     1 |   0.0776699 |  0.07920792079207921
+     1 |             |   0.0891089108910891
+     1 | 0.097087376 |                     
+     1 |             |  0.10891089108910891
+(11 rows)
+
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+\set tname gorilla_noscan_:compress
+set mars.enable_customscan to off;
+\i sql/gorilla/with_compress.template
+CREATE TABLE :tname
+(batch int,
+ ts timestamp,
+ f4 float4 ENCODING (compresstype=:compress),
+ f8 float  ENCODING (compresstype=:compress) )
+USING mars
+WITH (group_col_ = "{batch}", group_param_col_ = "{ts in 1 day}")
+DISTRIBUTED by (batch);
+CREATE TABLE heap_:tname
+(batch int,
+ ts timestamp,
+ f4 float4,
+ f8 float8)
+DISTRIBUTED by (batch);
+INSERT INTO heap_:tname VALUES
+  (0, '2020-10-10 09:01:02'::timestamp, null, null),
+  (0, '2020-10-10 09:01:03'::timestamp, null, null),
+  (0, '2020-10-10 09:01:04'::timestamp, null, null),
+  (0, '2020-10-10 09:01:05'::timestamp, null, null)
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT batch, f4, f8 FROM :tname;
+ batch | f4 | f8 
+-------+----+----
+     0 |    |   
+     0 |    |   
+     0 |    |   
+     0 |    |   
+(4 rows)
+
+SELECT
+ batch, :f4_agg_funcs, :f8_agg_funcs
+FROM :tname
+GROUP BY batch;
+ batch | f4count | f4min | f4max | f4avg | f4sum | f8count | f8min | f8max | f8avg | f8sum 
+-------+---------+-------+-------+-------+-------+---------+-------+-------+-------+-------
+     0 |       4 |       |       |       |       |       4 |       |       |       |      
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        i/1025, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', null, null
+    FROM
+    generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        i%2, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', null, null
+    FROM
+    generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        1, '2020-10-10 09:01:02'::timestamp + i * interval '1 second', i / 103::float4, i / 101::float8
+    FROM
+        generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+TRUNCATE :tname;
+TRUNCATE heap_:tname;
+INSERT INTO heap_:tname
+    SELECT
+        1 ,
+        '2020-10-10 09:01:02'::timestamp + i * interval '1 second',
+        CASE
+            WHEN i%2=1 THEN null
+            ELSE i/103::float4
+        END,
+        CASE
+            WHEN i%3=1 THEN null
+        ELSE i/101::float8
+        END
+    FROM
+        generate_series(1, 10251)i
+;
+INSERT INTO :tname SELECT * FROM heap_:tname ORDER BY batch, ts;
+SELECT batch, f4, f8 FROM :tname LIMIT 11;
+ batch |     f4      |          f8          
+-------+-------------+----------------------
+     1 |             |                     
+     1 | 0.019417476 | 0.019801980198019802
+     1 |             |   0.0297029702970297
+     1 |  0.03883495 |                     
+     1 |             |  0.04950495049504951
+     1 | 0.058252428 |   0.0594059405940594
+     1 |             |                     
+     1 |   0.0776699 |  0.07920792079207921
+     1 |             |   0.0891089108910891
+     1 | 0.097087376 |                     
+     1 |             |  0.10891089108910891
+(11 rows)
+
+SELECT COUNT(*) FROM
+(
+	SELECT * FROM :tname
+	INTERSECT ALL
+	SELECT * FROM heap_:tname
+) as t
+;
+ count 
+-------
+ 10251
+(1 row)
+
+-- one column (float-encode)
+CREATE TABLE gorilla_mars_1col (f8 float ENCODING (compresstype=:compress))
+USING mars DISTRIBUTED masteronly;
+insert into gorilla_mars_1col select i/101::float from generate_series(1, 1000000)i;
+-- start_ignore
+select pg_size_pretty(pg_total_relation_size('gorilla_mars_1col'));
+ pg_size_pretty 
+----------------
+ 699 kB
+(1 row)
+
+-- end_ignore
+select count(*) from gorilla_mars_1col;
+  count  
+---------
+ 1000000
+(1 row)
+
+-- two columns (int, float-encode)
+CREATE TABLE aoco_lz4 (float8 float ENCODING (compresstype=lz4))
+WITH (APPENDONLY=true, COMPRESSTYPE=lz4, compresslevel=1, ORIENTATION=column)
+DISTRIBUTED masteronly;
+CREATE TABLE aoco_zstd (float8 float ENCODING (compresstype=zstd))
+WITH (APPENDONLY=true, COMPRESSTYPE=zstd, compresslevel=1, ORIENTATION=column)
+DISTRIBUTED masteronly;
+CREATE TABLE gorilla_mars (float8 float)
+USING mars DISTRIBUTED masteronly;
+CREATE TABLE gorilla_lz4 (float8 float ENCODING (compresstype=lz4))
+USING mars DISTRIBUTED masteronly;
+CREATE TABLE gorilla_zstd(float8 float ENCODING (compresstype=zstd))
+USING mars DISTRIBUTED masteronly;
+\set test_data_set 'select i/101::float from generate_series(1, 1000000)i'
+insert into aoco_lz4 :test_data_set;
+insert into aoco_zstd :test_data_set;
+insert into gorilla_mars :test_data_set;
+insert into gorilla_lz4 :test_data_set;
+insert into gorilla_zstd :test_data_set;
+-- start_ignore
+select
+    pg_size_pretty(pg_total_relation_size('aoco_lz4')) as aoco_lz4,
+    pg_size_pretty(pg_total_relation_size('aoco_zstd')) as aoco_zstd,
+    pg_size_pretty(pg_total_relation_size('gorilla_mars')) as gorilla_mars,
+    pg_size_pretty(pg_total_relation_size('gorilla_lz4')) as gorilla_lz4,
+    pg_size_pretty(pg_total_relation_size('gorilla_zstd')) as gorilla_zstd;
+ aoco_lz4 | aoco_zstd | gorilla_mars | gorilla_lz4 | gorilla_zstd 
+----------+-----------+--------------+-------------+--------------
+ 4115 kB  | 1250 kB   | 5800 kB      | 780 kB      | 699 kB
+(1 row)
+
+-- end_ignore

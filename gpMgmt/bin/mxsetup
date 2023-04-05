@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -eu
+
+WORKDIR=`dirname $0`
+
+MXSETUP_COLLECT="$(${WORKDIR}/mxctl setup collect)"
+MXSETUP_PLAN="$(echo "${MXSETUP_COLLECT}" | ${WORKDIR}/mxctl setup plan)"
+echo "${MXSETUP_PLAN}" | ${WORKDIR}/mxctl setup exec --mode cli

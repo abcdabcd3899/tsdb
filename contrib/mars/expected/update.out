@@ -1,0 +1,3976 @@
+--
+-- verify the UPDATE on mars relations.
+--
+-- to have stable output a trick is played that all the data are distributed to
+-- the same segment by set the distribution key to the same value in all the
+-- rows.
+--
+-- in the tests we want to verify the block ids of the new, maybe merged, data,
+-- and we want to verify the data content, we must verify them separately,
+-- because some tests don't have stable data order on param groupkeys.
+--
+-- NOTE: new test items can only be appended to the template file; if any item
+-- is inserted in the middle, all the tests after it will fail due to block id
+-- changes.
+--
+\set tname test_mars_update_group_0_0
+\set withopts ''
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (1,3) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (1,3) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (3,1)
+ (3,2)
+ (3,3)
+ (3,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (5,3)
+ (5,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (6,1)
+ (6,2)
+ (6,3)
+ (6,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (7,3)
+ (7,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+    select c1 from :tname;
+ c1  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+ c2  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_1_0
+\set withopts 'with (group_col_=''{c1}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (4,1)
+ (4,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (8,1)
+ (8,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+  ctid  
+--------
+ (9,1)
+ (9,2)
+ (10,1)
+ (10,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+  ctid  
+--------
+ (11,1)
+ (11,2)
+ (12,1)
+ (12,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+psql:sql/update.template:109: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c1 from :tname;
+psql:sql/update.template:110: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+ c2  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_4_0
+\set withopts 'with (group_param_col_=''{c1 in 4}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (1,3) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (1,3) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (3,1)
+ (3,2)
+ (3,3)
+ (3,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (5,3)
+ (5,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (6,1)
+ (6,2)
+ (6,3)
+ (6,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (7,3)
+ (7,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+psql:sql/update.template:109: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c1 from :tname;
+psql:sql/update.template:110: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+ c2  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_1_4
+\set withopts 'with (group_col_=''{c1}'', group_param_col_=''{c2 in 4}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (4,1)
+ (4,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (8,1)
+ (8,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+  ctid  
+--------
+ (9,1)
+ (9,2)
+ (10,1)
+ (10,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+  ctid  
+--------
+ (11,1)
+ (11,2)
+ (12,1)
+ (12,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+psql:sql/update.template:109: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c1 from :tname;
+psql:sql/update.template:110: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+psql:sql/update.template:115: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c2 from :tname;
+psql:sql/update.template:116: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_1_0_order1
+\set withopts 'with (group_col_=''{c1}'', local_order_col_=''{c1}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (4,1)
+ (4,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (8,1)
+ (8,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+  ctid  
+--------
+ (9,1)
+ (9,2)
+ (10,1)
+ (10,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+  ctid  
+--------
+ (11,1)
+ (11,2)
+ (12,1)
+ (12,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+psql:sql/update.template:109: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c1 from :tname;
+psql:sql/update.template:110: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+ c2  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_1_0_order2
+\set withopts 'with (group_col_=''{c1}'', local_order_col_=''{c2}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (4,1)
+ (4,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (8,1)
+ (8,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+  ctid  
+--------
+ (9,1)
+ (9,2)
+ (10,1)
+ (10,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+  ctid  
+--------
+ (11,1)
+ (11,2)
+ (12,1)
+ (12,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+psql:sql/update.template:109: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c1 from :tname;
+psql:sql/update.template:110: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+ c2  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_1_0_order12
+\set withopts 'with (group_col_=''{c1}'', local_order_col_=''{c1, c2}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (4,1)
+ (4,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (8,1)
+ (8,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+  ctid  
+--------
+ (9,1)
+ (9,2)
+ (10,1)
+ (10,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+  ctid  
+--------
+ (11,1)
+ (11,2)
+ (12,1)
+ (12,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+psql:sql/update.template:109: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c1 from :tname;
+psql:sql/update.template:110: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+ c2  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_4_0_order1
+\set withopts 'with (group_param_col_=''{c1 in 4}'', local_order_col_=''{c1}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (1,3) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (1,3) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (3,1)
+ (3,2)
+ (3,3)
+ (3,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (5,3)
+ (5,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (6,1)
+ (6,2)
+ (6,3)
+ (6,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (7,3)
+ (7,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+psql:sql/update.template:109: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c1 from :tname;
+psql:sql/update.template:110: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+ c2  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_4_0_order2
+\set withopts 'with (group_param_col_=''{c1 in 4}'', local_order_col_=''{c2}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  1 |  0 |  1 |  0
+ (1,3) |  0 |  1 |  0 |  1
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,3) |  0 |  1 |  0 |  1
+ (1,2) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (3,1)
+ (3,2)
+ (3,3)
+ (3,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (5,3)
+ (5,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (6,1)
+ (6,2)
+ (6,3)
+ (6,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (7,3)
+ (7,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+psql:sql/update.template:109: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c1 from :tname;
+psql:sql/update.template:110: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+ c2  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_1_4_order1
+\set withopts 'with (group_col_=''{c1}'', group_param_col_=''{c2 in 4}'', local_order_col_=''{c1}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (4,1)
+ (4,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (8,1)
+ (8,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+  ctid  
+--------
+ (9,1)
+ (9,2)
+ (10,1)
+ (10,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+  ctid  
+--------
+ (11,1)
+ (11,2)
+ (12,1)
+ (12,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+psql:sql/update.template:109: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c1 from :tname;
+psql:sql/update.template:110: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+psql:sql/update.template:115: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c2 from :tname;
+psql:sql/update.template:116: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_1_4_order2
+\set withopts 'with (group_col_=''{c1}'', group_param_col_=''{c2 in 4}'', local_order_col_=''{c2}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (4,1)
+ (4,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (8,1)
+ (8,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+  ctid  
+--------
+ (9,1)
+ (9,2)
+ (10,1)
+ (10,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+  ctid  
+--------
+ (11,1)
+ (11,2)
+ (12,1)
+ (12,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+psql:sql/update.template:109: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c1 from :tname;
+psql:sql/update.template:110: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+psql:sql/update.template:115: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c2 from :tname;
+psql:sql/update.template:116: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_1_4_order12
+\set withopts 'with (group_col_=''{c1}'', group_param_col_=''{c2 in 4}'', local_order_col_=''{c1, c2}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (2,1) |  1 |  0 |  1 |  0
+ (2,2) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (3,1)
+ (3,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (4,1)
+ (4,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (6,1)
+ (6,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (8,1)
+ (8,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+  ctid  
+--------
+ (9,1)
+ (9,2)
+ (10,1)
+ (10,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+  ctid  
+--------
+ (11,1)
+ (11,2)
+ (12,1)
+ (12,2)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+psql:sql/update.template:109: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c1 from :tname;
+psql:sql/update.template:110: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+psql:sql/update.template:115: ERROR:  mars: cannot update on the groupkeys  (seg0 192.168.99.101:4002 pid=805638)
+    select c2 from :tname;
+psql:sql/update.template:116: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_0_0_order1
+\set withopts 'with (local_order_col_=''{c1}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (1,3) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (1,3) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (3,1)
+ (3,2)
+ (3,3)
+ (3,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (5,3)
+ (5,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (6,1)
+ (6,2)
+ (6,3)
+ (6,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (7,3)
+ (7,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+    select c1 from :tname;
+ c1  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+ c2  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_0_0_order2
+\set withopts 'with (local_order_col_=''{c2}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  1 |  0 |  1 |  0
+ (1,3) |  0 |  1 |  0 |  1
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,3) |  0 |  1 |  0 |  1
+ (1,2) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (3,1)
+ (3,2)
+ (3,3)
+ (3,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (5,3)
+ (5,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (6,1)
+ (6,2)
+ (6,3)
+ (6,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (7,3)
+ (7,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+    select c1 from :tname;
+ c1  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+ c2  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+-- vi: syntax=sql et :
+\set tname test_mars_update_group_0_0_order12
+\set withopts 'with (local_order_col_=''{c1, c2}'')'
+\i sql/update.template
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (1,3) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ ctid  | c1 | c2 | c3 | c4 
+-------+----+----+----+----
+ (1,1) |  0 |  0 |  0 |  0
+ (1,2) |  0 |  1 |  0 |  1
+ (1,3) |  1 |  0 |  1 |  0
+ (1,4) |  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 2. update a single row
+--
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (2,1)
+ (2,2)
+ (2,3)
+ (2,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (3,1)
+ (3,2)
+ (3,3)
+ (3,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 |   1 |   0
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 3. update multiple rows
+--
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (4,1)
+ (4,2)
+ (4,3)
+ (4,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 800 | 900
+  0 |  1 |   0 |   1
+  1 |  0 | 801 | 900
+  1 |  1 |   1 |   1
+(4 rows)
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+ ctid  
+-------
+ (5,1)
+ (5,2)
+ (5,3)
+ (5,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3  | c4  
+----+----+-----+-----
+  0 |  0 | 500 | 600
+  0 |  1 |   0 |   1
+  1 |  0 | 501 | 600
+  1 |  1 |   1 |   1
+(4 rows)
+
+abort;
+--
+-- 4. update to nulls, and update from nulls
+--
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+ ctid  
+-------
+ (6,1)
+ (6,2)
+ (6,3)
+ (6,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |   
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |   
+  1 |  1 |  1 |  1
+(4 rows)
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+ ctid  
+-------
+ (7,1)
+ (7,2)
+ (7,3)
+ (7,4)
+(4 rows)
+
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+ c1 | c2 | c3 | c4 
+----+----+----+----
+  0 |  0 |  0 |  0
+  0 |  1 |  0 |  1
+  1 |  0 |  1 |  0
+  1 |  1 |  1 |  1
+(4 rows)
+
+abort;
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+    select c1 from :tname;
+ c1  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+ c2  
+-----
+ 999
+ 999
+ 999
+ 999
+(4 rows)
+
+abort;
+-- vi: syntax=sql et :
+-- vi: et :

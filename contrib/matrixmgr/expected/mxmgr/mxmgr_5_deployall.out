@@ -1,0 +1,37 @@
+\c matrixmgr
+SELECT proargnames, prosrc FROM pg_proc WHERE  proname = 'mxmgr_validate';
+  proargnames  |                                  prosrc                                  
+---------------+--------------------------------------------------------------------------
+ {schema_name} |                                                                         +
+               | BEGIN                                                                   +
+               |     PERFORM matrixmgr_internal.mxmgr_gate_deploy(schema_name, true);    +
+               |     PERFORM matrixmgr_internal.mxmgr_telegraf_deploy(schema_name, true);+
+               |     RETURN true;                                                        +
+               | END;                                                                    +
+               | 
+(1 row)
+
+SELECT proargnames, prosrc FROM pg_proc WHERE  proname = 'mxmgr_deploy';
+  proargnames  |                                  prosrc                                   
+---------------+---------------------------------------------------------------------------
+ {schema_name} |                                                                          +
+               | BEGIN                                                                    +
+               |     PERFORM matrixmgr_internal.mxmgr_gate_deploy(schema_name, false);    +
+               |     PERFORM matrixmgr_internal.mxmgr_telegraf_deploy(schema_name, false);+
+               |     RETURN true;                                                         +
+               | END;                                                                     +
+               | 
+(1 row)
+
+SELECT proargnames, prosrc FROM pg_proc WHERE  proname = 'mxmgr_remove_all';
+  proargnames  |                               prosrc                               
+---------------+--------------------------------------------------------------------
+ {schema_name} |                                                                   +
+               | BEGIN                                                             +
+               |     PERFORM matrixmgr_internal.mxmgr_remove_gate(schema_name);    +
+               |     PERFORM matrixmgr_internal.mxmgr_remove_telegraf(schema_name);+
+               |     RETURN true;                                                  +
+               | END;                                                              +
+               | 
+(1 row)
+

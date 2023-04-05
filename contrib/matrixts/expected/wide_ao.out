@@ -1,0 +1,79 @@
+-- start_ignore
+create extension if not exists matrixts;
+drop schema if exists test_wide;
+-- end_ignore
+create schema test_wide;
+\set ncols 1600
+\set nrows 10
+\set tname test_wide.t_aoco
+\set am ao_column
+\i sql/wide_ao.template
+-- generate column definition
+\out /dev/null
+select string_agg(', c' || i || ' int', e'\n') as cols
+  from generate_series(2, :ncols) i
+;
+\out
+\gset
+create table :tname
+     ( c0    int
+     :cols
+     )
+ using ao_column
+  distributed by (c0)
+;
+-- generate column values
+\out /dev/null
+select string_agg(', i as c' || i, e'\n') as cols
+  from generate_series(2, :ncols) i
+;
+\out
+\gset
+insert into :tname
+select i as c0
+	 :cols
+  from generate_series(1, :nrows) i
+;
+-- read from the table
+select sum(c0) from :tname;
+ sum 
+-----
+  55
+(1 row)
+
+\set tname test_wide.t_ao
+\set am ao_row
+\i sql/wide_ao.template
+-- generate column definition
+\out /dev/null
+select string_agg(', c' || i || ' int', e'\n') as cols
+  from generate_series(2, :ncols) i
+;
+\out
+\gset
+create table :tname
+     ( c0    int
+     :cols
+     )
+ using ao_column
+  distributed by (c0)
+;
+-- generate column values
+\out /dev/null
+select string_agg(', i as c' || i, e'\n') as cols
+  from generate_series(2, :ncols) i
+;
+\out
+\gset
+insert into :tname
+select i as c0
+	 :cols
+  from generate_series(1, :nrows) i
+;
+-- read from the table
+select sum(c0) from :tname;
+ sum 
+-----
+  55
+(1 row)
+

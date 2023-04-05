@@ -1,0 +1,1066 @@
+--
+-- verify NULL handling.
+--
+-- at the moment we do not allow speciying "NULLS FIRST" or "NULLS LAST" in the
+-- order options, the default is "NULLS LAST" as the store order is always ASC
+-- in mars.
+--
+-- start_ignore
+create extension if not exists matrixts;
+NOTICE:  extension "matrixts" already exists, skipping
+create extension if not exists mars;
+NOTICE:  extension "mars" already exists, skipping
+create extension if not exists gp_debug_numsegments;
+NOTICE:  extension "gp_debug_numsegments" already exists, skipping
+-- end_ignore
+--
+-- case 1, do not specify the local_order_col option, so reorder is needed in
+-- ordered output, we need to verify the null handling here.
+--
+\set tname test_mars_null_t1
+drop table if exists :tname;
+NOTICE:  table "test_mars_null_t1" does not exist, skipping
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+create table :tname (batch int, c1 int, c2 int, id serial)
+ using mars
+  with ( group_col_ = "{batch}"
+       , group_param_col_ = "{id in 1000}"
+       )
+ distributed by (batch);
+select gp_debug_reset_create_table_default_numsegments();
+ gp_debug_reset_create_table_default_numsegments 
+-------------------------------------------------
+ 
+(1 row)
+
+\i sql/null.template
+insert into :tname values
+-- nothing, just a placeholder
+\set batch 0
+  (:batch, 0, 0)
+-- partial nulls
+\set batch 10
+, (:batch, 1, 1)
+, (:batch, 2, 2)
+, (:batch, 3, null)
+, (:batch, 4, null)
+, (:batch, 5, null)
+, (:batch, 6, 6)
+, (:batch, 7, 7)
+, (:batch, 8, 8)
+, (:batch, null, 9)
+, (:batch, null, 10)
+, (:batch, null, null)
+, (:batch, null, null)
+, (:batch, null, 13)
+, (:batch, null, 14)
+-- only nulls
+\set batch 20
+, (:batch, null, null)
+, (:batch, null, null)
+, (:batch, null, null)
+-- end of the insert
+;
+-- verify the store order
+select batch, c1, c2 from :tname;
+ batch | c1 | c2 
+-------+----+----
+     0 |  0 |  0
+    10 |  1 |  1
+    10 |  2 |  2
+    10 |  3 |   
+    10 |  4 |   
+    10 |  5 |   
+    10 |  6 |  6
+    10 |  7 |  7
+    10 |  8 |  8
+    10 |    |  9
+    10 |    | 10
+    10 |    |   
+    10 |    |   
+    10 |    | 13
+    10 |    | 14
+    20 |    |   
+    20 |    |   
+    20 |    |   
+(18 rows)
+
+-- verify the block-level reordered scan order
+select batch, c1, c2 from :tname order by batch, c1;
+ batch | c1 | c2 
+-------+----+----
+     0 |  0 |  0
+    10 |  1 |  1
+    10 |  2 |  2
+    10 |  3 |   
+    10 |  4 |   
+    10 |  5 |   
+    10 |  6 |  6
+    10 |  7 |  7
+    10 |  8 |  8
+    10 |    |  9
+    10 |    | 10
+    10 |    |   
+    10 |    |   
+    10 |    | 13
+    10 |    | 14
+    20 |    |   
+    20 |    |   
+    20 |    |   
+(18 rows)
+
+-- unordered scan
+select c1, c2 from :tname where c1 <  4;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  3 |   
+(4 rows)
+
+select c1, c2 from :tname where c1 <= 4;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  3 |   
+  4 |   
+(5 rows)
+
+select c1, c2 from :tname where c1 =  4;
+ c1 | c2 
+----+----
+  4 |   
+(1 row)
+
+select c1, c2 from :tname where c1 >= 4;
+ c1 | c2 
+----+----
+  4 |   
+  5 |   
+  6 |  6
+  7 |  7
+  8 |  8
+(5 rows)
+
+select c1, c2 from :tname where c1 >  4;
+ c1 | c2 
+----+----
+  5 |   
+  6 |  6
+  7 |  7
+  8 |  8
+(4 rows)
+
+select c1, c2 from :tname where c2 <  7;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  6 |  6
+(4 rows)
+
+select c1, c2 from :tname where c2 <= 7;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  6 |  6
+  7 |  7
+(5 rows)
+
+select c1, c2 from :tname where c2 =  7;
+ c1 | c2 
+----+----
+  7 |  7
+(1 row)
+
+select c1, c2 from :tname where c2 >= 7;
+ c1 | c2 
+----+----
+  7 |  7
+  8 |  8
+    |  9
+    | 10
+    | 13
+    | 14
+(6 rows)
+
+select c1, c2 from :tname where c2 >  7;
+ c1 | c2 
+----+----
+  8 |  8
+    |  9
+    | 10
+    | 13
+    | 14
+(5 rows)
+
+select c1, c2 from :tname where c1 in (10, 1, null, 7);
+ c1 | c2 
+----+----
+  1 |  1
+  7 |  7
+(2 rows)
+
+select c1, c2 from :tname where c2 in (10, 1, null, 7);
+ c1 | c2 
+----+----
+  1 |  1
+  7 |  7
+    | 10
+(3 rows)
+
+-- ordered scan
+select c1, c2 from :tname where c1 <  4 order by batch, c1;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  3 |   
+(4 rows)
+
+select c1, c2 from :tname where c1 <= 4 order by batch, c1;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  3 |   
+  4 |   
+(5 rows)
+
+select c1, c2 from :tname where c1 =  4 order by batch, c1;
+ c1 | c2 
+----+----
+  4 |   
+(1 row)
+
+select c1, c2 from :tname where c1 >= 4 order by batch, c1;
+ c1 | c2 
+----+----
+  4 |   
+  5 |   
+  6 |  6
+  7 |  7
+  8 |  8
+(5 rows)
+
+select c1, c2 from :tname where c1 >  4 order by batch, c1;
+ c1 | c2 
+----+----
+  5 |   
+  6 |  6
+  7 |  7
+  8 |  8
+(4 rows)
+
+select c1, c2 from :tname where c2 <  7 order by batch, c1;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  6 |  6
+(4 rows)
+
+select c1, c2 from :tname where c2 <= 7 order by batch, c1;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  6 |  6
+  7 |  7
+(5 rows)
+
+select c1, c2 from :tname where c2 =  7 order by batch, c1;
+ c1 | c2 
+----+----
+  7 |  7
+(1 row)
+
+select c1, c2 from :tname where c2 >= 7 order by batch, c1;
+ c1 | c2 
+----+----
+  7 |  7
+  8 |  8
+    |  9
+    | 10
+    | 13
+    | 14
+(6 rows)
+
+select c1, c2 from :tname where c2 >  7 order by batch, c1;
+ c1 | c2 
+----+----
+  8 |  8
+    |  9
+    | 10
+    | 13
+    | 14
+(5 rows)
+
+select c1, c2 from :tname where c1 in (10, 1, null, 7) order by batch, c1;
+ c1 | c2 
+----+----
+  1 |  1
+  7 |  7
+(2 rows)
+
+select c1, c2 from :tname where c2 in (10, 1, null, 7) order by batch, c1;
+ c1 | c2 
+----+----
+  1 |  1
+  7 |  7
+    | 10
+(3 rows)
+
+-- ordered backward scan
+select c1, c2 from :tname where c1 <  4 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  3 |   
+  2 |  2
+  1 |  1
+  0 |  0
+(4 rows)
+
+select c1, c2 from :tname where c1 <= 4 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  4 |   
+  3 |   
+  2 |  2
+  1 |  1
+  0 |  0
+(5 rows)
+
+select c1, c2 from :tname where c1 =  4 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  4 |   
+(1 row)
+
+select c1, c2 from :tname where c1 >= 4 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  8 |  8
+  7 |  7
+  6 |  6
+  5 |   
+  4 |   
+(5 rows)
+
+select c1, c2 from :tname where c1 >  4 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  8 |  8
+  7 |  7
+  6 |  6
+  5 |   
+(4 rows)
+
+select c1, c2 from :tname where c2 <  7 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  6 |  6
+  2 |  2
+  1 |  1
+  0 |  0
+(4 rows)
+
+select c1, c2 from :tname where c2 <= 7 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  7 |  7
+  6 |  6
+  2 |  2
+  1 |  1
+  0 |  0
+(5 rows)
+
+select c1, c2 from :tname where c2 =  7 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  7 |  7
+(1 row)
+
+select c1, c2 > 8 from :tname where c2 >= 7 order by batch desc, c1 desc;
+ c1 | ?column? 
+----+----------
+    | t
+    | t
+    | t
+    | t
+  8 | f
+  7 | f
+(6 rows)
+
+select c1, c2 > 8 from :tname where c2 >  7 order by batch desc, c1 desc;
+ c1 | ?column? 
+----+----------
+    | t
+    | t
+    | t
+    | t
+  8 | f
+(5 rows)
+
+select c1, c2 from :tname where c1 in (10, 1, null, 7) order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  7 |  7
+  1 |  1
+(2 rows)
+
+select c1, c2 from :tname where c2 in (10, 1, null, 7) order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+    | 10
+  7 |  7
+  1 |  1
+(3 rows)
+
+-- grouped scan
+select batch
+     , count() as row_count
+     , count(c1) as count_c1
+     , count(c2) as count_c2
+  from :tname
+ group by batch;
+ batch | row_count | count_c1 | count_c2 
+-------+-----------+----------+----------
+     0 |         1 |        1 |        1
+    10 |        14 |        8 |        9
+    20 |         3 |        0 |        0
+(3 rows)
+
+select batch
+     , min(c1) as min_c1
+     , min(c2) as min_c2
+     , max(c1) as max_c1
+     , max(c2) as max_c2
+  from :tname
+ group by batch;
+ batch | min_c1 | min_c2 | max_c1 | max_c2 
+-------+--------+--------+--------+--------
+     0 |      0 |      0 |      0 |      0
+    10 |      1 |      1 |      8 |     14
+    20 |        |        |        |       
+(3 rows)
+
+select batch
+     , first(c1, c1) as first_c1_c1
+     , first(c1, c2) as first_c1_c2
+     , first(c2, c1) as first_c2_c1
+     , first(c2, c2) as first_c2_c2
+  from :tname
+ group by batch;
+ batch | first_c1_c1 | first_c1_c2 | first_c2_c1 | first_c2_c2 
+-------+-------------+-------------+-------------+-------------
+     0 |           0 |           0 |           0 |           0
+    10 |           1 |           1 |           1 |           1
+    20 |             |             |             |            
+(3 rows)
+
+select batch
+     , last(c1, c1) as last_c1_c1
+     , last(c1, c2) as last_c1_c2
+     , last(c2, c1) as last_c2_c1
+     , last(c2, c2) as last_c2_c2
+  from :tname
+ group by batch;
+ batch | last_c1_c1 | last_c1_c2 | last_c2_c1 | last_c2_c2 
+-------+------------+------------+------------+------------
+     0 |          0 |          0 |          0 |          0
+    10 |          8 |            |          8 |         14
+    20 |            |            |            |           
+(3 rows)
+
+select batch
+     , sum(c1) as sum_c1
+     , sum(c2) as sum_c2
+     , avg(c1) as avg_c1
+     , avg(c2) as avg_c2
+  from :tname
+ group by batch;
+ batch | sum_c1 | sum_c2 |         avg_c1         |         avg_c2         
+-------+--------+--------+------------------------+------------------------
+     0 |      0 |      0 | 0.00000000000000000000 | 0.00000000000000000000
+    10 |     36 |     70 |     4.5000000000000000 |     7.7777777777777778
+    20 |        |        |                        |                       
+(3 rows)
+
+select min(c2) as min_c2
+     , max(c2) as max_c2
+  from :tname
+ where c1 is null;
+ min_c2 | max_c2 
+--------+--------
+      9 |     14
+(1 row)
+
+select min(c2) as min_c2
+     , max(c2) as max_c2
+  from :tname
+ where c1 is not null;
+ min_c2 | max_c2 
+--------+--------
+      0 |      8
+(1 row)
+
+select sum(c2) as sum_c2
+     , trunc(avg(c2), 2) as avg_c2
+  from :tname
+ where c1 is null;
+ sum_c2 | avg_c2 
+--------+--------
+     46 |  11.50
+(1 row)
+
+select sum(c2) as sum_c2
+     , trunc(avg(c2), 2) as avg_c2
+  from :tname
+ where c1 is not null;
+ sum_c2 | avg_c2 
+--------+--------
+     24 |   4.00
+(1 row)
+
+--
+-- case 2, specify the local_order_col option, so block level fast-seeking is
+-- used, we need to verify the null handling here.
+--
+\set tname test_mars_null_t2
+drop table if exists :tname;
+NOTICE:  table "test_mars_null_t2" does not exist, skipping
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+create table :tname (batch int, c1 int, c2 int, id serial)
+ using mars
+  with ( group_col_ = "{batch}"
+       , group_param_col_ = "{id in 1000}"
+       , local_order_col_ = "{c1}"
+       )
+ distributed by (batch);
+select gp_debug_reset_create_table_default_numsegments();
+ gp_debug_reset_create_table_default_numsegments 
+-------------------------------------------------
+ 
+(1 row)
+
+\i sql/null.template
+insert into :tname values
+-- nothing, just a placeholder
+\set batch 0
+  (:batch, 0, 0)
+-- partial nulls
+\set batch 10
+, (:batch, 1, 1)
+, (:batch, 2, 2)
+, (:batch, 3, null)
+, (:batch, 4, null)
+, (:batch, 5, null)
+, (:batch, 6, 6)
+, (:batch, 7, 7)
+, (:batch, 8, 8)
+, (:batch, null, 9)
+, (:batch, null, 10)
+, (:batch, null, null)
+, (:batch, null, null)
+, (:batch, null, 13)
+, (:batch, null, 14)
+-- only nulls
+\set batch 20
+, (:batch, null, null)
+, (:batch, null, null)
+, (:batch, null, null)
+-- end of the insert
+;
+-- verify the store order
+select batch, c1, c2 from :tname;
+ batch | c1 | c2 
+-------+----+----
+     0 |  0 |  0
+    10 |  1 |  1
+    10 |  2 |  2
+    10 |  3 |   
+    10 |  4 |   
+    10 |  5 |   
+    10 |  6 |  6
+    10 |  7 |  7
+    10 |  8 |  8
+    10 |    |  9
+    10 |    | 10
+    10 |    |   
+    10 |    |   
+    10 |    | 13
+    10 |    | 14
+    20 |    |   
+    20 |    |   
+    20 |    |   
+(18 rows)
+
+-- verify the block-level reordered scan order
+select batch, c1, c2 from :tname order by batch, c1;
+ batch | c1 | c2 
+-------+----+----
+     0 |  0 |  0
+    10 |  1 |  1
+    10 |  2 |  2
+    10 |  3 |   
+    10 |  4 |   
+    10 |  5 |   
+    10 |  6 |  6
+    10 |  7 |  7
+    10 |  8 |  8
+    10 |    |  9
+    10 |    | 10
+    10 |    |   
+    10 |    |   
+    10 |    | 13
+    10 |    | 14
+    20 |    |   
+    20 |    |   
+    20 |    |   
+(18 rows)
+
+-- unordered scan
+select c1, c2 from :tname where c1 <  4;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  3 |   
+(4 rows)
+
+select c1, c2 from :tname where c1 <= 4;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  3 |   
+  4 |   
+(5 rows)
+
+select c1, c2 from :tname where c1 =  4;
+ c1 | c2 
+----+----
+  4 |   
+(1 row)
+
+select c1, c2 from :tname where c1 >= 4;
+ c1 | c2 
+----+----
+  4 |   
+  5 |   
+  6 |  6
+  7 |  7
+  8 |  8
+(5 rows)
+
+select c1, c2 from :tname where c1 >  4;
+ c1 | c2 
+----+----
+  5 |   
+  6 |  6
+  7 |  7
+  8 |  8
+(4 rows)
+
+select c1, c2 from :tname where c2 <  7;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  6 |  6
+(4 rows)
+
+select c1, c2 from :tname where c2 <= 7;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  6 |  6
+  7 |  7
+(5 rows)
+
+select c1, c2 from :tname where c2 =  7;
+ c1 | c2 
+----+----
+  7 |  7
+(1 row)
+
+select c1, c2 from :tname where c2 >= 7;
+ c1 | c2 
+----+----
+  7 |  7
+  8 |  8
+    |  9
+    | 10
+    | 13
+    | 14
+(6 rows)
+
+select c1, c2 from :tname where c2 >  7;
+ c1 | c2 
+----+----
+  8 |  8
+    |  9
+    | 10
+    | 13
+    | 14
+(5 rows)
+
+select c1, c2 from :tname where c1 in (10, 1, null, 7);
+ c1 | c2 
+----+----
+  1 |  1
+  7 |  7
+(2 rows)
+
+select c1, c2 from :tname where c2 in (10, 1, null, 7);
+ c1 | c2 
+----+----
+  1 |  1
+  7 |  7
+    | 10
+(3 rows)
+
+-- ordered scan
+select c1, c2 from :tname where c1 <  4 order by batch, c1;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  3 |   
+(4 rows)
+
+select c1, c2 from :tname where c1 <= 4 order by batch, c1;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  3 |   
+  4 |   
+(5 rows)
+
+select c1, c2 from :tname where c1 =  4 order by batch, c1;
+ c1 | c2 
+----+----
+  4 |   
+(1 row)
+
+select c1, c2 from :tname where c1 >= 4 order by batch, c1;
+ c1 | c2 
+----+----
+  4 |   
+  5 |   
+  6 |  6
+  7 |  7
+  8 |  8
+(5 rows)
+
+select c1, c2 from :tname where c1 >  4 order by batch, c1;
+ c1 | c2 
+----+----
+  5 |   
+  6 |  6
+  7 |  7
+  8 |  8
+(4 rows)
+
+select c1, c2 from :tname where c2 <  7 order by batch, c1;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  6 |  6
+(4 rows)
+
+select c1, c2 from :tname where c2 <= 7 order by batch, c1;
+ c1 | c2 
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  6 |  6
+  7 |  7
+(5 rows)
+
+select c1, c2 from :tname where c2 =  7 order by batch, c1;
+ c1 | c2 
+----+----
+  7 |  7
+(1 row)
+
+select c1, c2 from :tname where c2 >= 7 order by batch, c1;
+ c1 | c2 
+----+----
+  7 |  7
+  8 |  8
+    |  9
+    | 10
+    | 13
+    | 14
+(6 rows)
+
+select c1, c2 from :tname where c2 >  7 order by batch, c1;
+ c1 | c2 
+----+----
+  8 |  8
+    |  9
+    | 10
+    | 13
+    | 14
+(5 rows)
+
+select c1, c2 from :tname where c1 in (10, 1, null, 7) order by batch, c1;
+ c1 | c2 
+----+----
+  1 |  1
+  7 |  7
+(2 rows)
+
+select c1, c2 from :tname where c2 in (10, 1, null, 7) order by batch, c1;
+ c1 | c2 
+----+----
+  1 |  1
+  7 |  7
+    | 10
+(3 rows)
+
+-- ordered backward scan
+select c1, c2 from :tname where c1 <  4 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  3 |   
+  2 |  2
+  1 |  1
+  0 |  0
+(4 rows)
+
+select c1, c2 from :tname where c1 <= 4 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  4 |   
+  3 |   
+  2 |  2
+  1 |  1
+  0 |  0
+(5 rows)
+
+select c1, c2 from :tname where c1 =  4 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  4 |   
+(1 row)
+
+select c1, c2 from :tname where c1 >= 4 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  8 |  8
+  7 |  7
+  6 |  6
+  5 |   
+  4 |   
+(5 rows)
+
+select c1, c2 from :tname where c1 >  4 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  8 |  8
+  7 |  7
+  6 |  6
+  5 |   
+(4 rows)
+
+select c1, c2 from :tname where c2 <  7 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  6 |  6
+  2 |  2
+  1 |  1
+  0 |  0
+(4 rows)
+
+select c1, c2 from :tname where c2 <= 7 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  7 |  7
+  6 |  6
+  2 |  2
+  1 |  1
+  0 |  0
+(5 rows)
+
+select c1, c2 from :tname where c2 =  7 order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  7 |  7
+(1 row)
+
+select c1, c2 > 8 from :tname where c2 >= 7 order by batch desc, c1 desc;
+ c1 | ?column? 
+----+----------
+    | t
+    | t
+    | t
+    | t
+  8 | f
+  7 | f
+(6 rows)
+
+select c1, c2 > 8 from :tname where c2 >  7 order by batch desc, c1 desc;
+ c1 | ?column? 
+----+----------
+    | t
+    | t
+    | t
+    | t
+  8 | f
+(5 rows)
+
+select c1, c2 from :tname where c1 in (10, 1, null, 7) order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+  7 |  7
+  1 |  1
+(2 rows)
+
+select c1, c2 from :tname where c2 in (10, 1, null, 7) order by batch desc, c1 desc;
+ c1 | c2 
+----+----
+    | 10
+  7 |  7
+  1 |  1
+(3 rows)
+
+-- grouped scan
+select batch
+     , count() as row_count
+     , count(c1) as count_c1
+     , count(c2) as count_c2
+  from :tname
+ group by batch;
+ batch | row_count | count_c1 | count_c2 
+-------+-----------+----------+----------
+     0 |         1 |        1 |        1
+    10 |        14 |        8 |        9
+    20 |         3 |        0 |        0
+(3 rows)
+
+select batch
+     , min(c1) as min_c1
+     , min(c2) as min_c2
+     , max(c1) as max_c1
+     , max(c2) as max_c2
+  from :tname
+ group by batch;
+ batch | min_c1 | min_c2 | max_c1 | max_c2 
+-------+--------+--------+--------+--------
+     0 |      0 |      0 |      0 |      0
+    10 |      1 |      1 |      8 |     14
+    20 |        |        |        |       
+(3 rows)
+
+select batch
+     , first(c1, c1) as first_c1_c1
+     , first(c1, c2) as first_c1_c2
+     , first(c2, c1) as first_c2_c1
+     , first(c2, c2) as first_c2_c2
+  from :tname
+ group by batch;
+ batch | first_c1_c1 | first_c1_c2 | first_c2_c1 | first_c2_c2 
+-------+-------------+-------------+-------------+-------------
+     0 |           0 |           0 |           0 |           0
+    10 |           1 |           1 |           1 |           1
+    20 |             |             |             |            
+(3 rows)
+
+select batch
+     , last(c1, c1) as last_c1_c1
+     , last(c1, c2) as last_c1_c2
+     , last(c2, c1) as last_c2_c1
+     , last(c2, c2) as last_c2_c2
+  from :tname
+ group by batch;
+ batch | last_c1_c1 | last_c1_c2 | last_c2_c1 | last_c2_c2 
+-------+------------+------------+------------+------------
+     0 |          0 |          0 |          0 |          0
+    10 |          8 |            |          8 |         14
+    20 |            |            |            |           
+(3 rows)
+
+select batch
+     , sum(c1) as sum_c1
+     , sum(c2) as sum_c2
+     , avg(c1) as avg_c1
+     , avg(c2) as avg_c2
+  from :tname
+ group by batch;
+ batch | sum_c1 | sum_c2 |         avg_c1         |         avg_c2         
+-------+--------+--------+------------------------+------------------------
+     0 |      0 |      0 | 0.00000000000000000000 | 0.00000000000000000000
+    10 |     36 |     70 |     4.5000000000000000 |     7.7777777777777778
+    20 |        |        |                        |                       
+(3 rows)
+
+select min(c2) as min_c2
+     , max(c2) as max_c2
+  from :tname
+ where c1 is null;
+ min_c2 | max_c2 
+--------+--------
+      9 |     14
+(1 row)
+
+select min(c2) as min_c2
+     , max(c2) as max_c2
+  from :tname
+ where c1 is not null;
+ min_c2 | max_c2 
+--------+--------
+      0 |      8
+(1 row)
+
+select sum(c2) as sum_c2
+     , trunc(avg(c2), 2) as avg_c2
+  from :tname
+ where c1 is null;
+ sum_c2 | avg_c2 
+--------+--------
+     46 |  11.50
+(1 row)
+
+select sum(c2) as sum_c2
+     , trunc(avg(c2), 2) as avg_c2
+  from :tname
+ where c1 is not null;
+ sum_c2 | avg_c2 
+--------+--------
+     24 |   4.00
+(1 row)
+

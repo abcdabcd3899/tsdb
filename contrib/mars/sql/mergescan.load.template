@@ -1,0 +1,64 @@
+-- start_ignore
+drop table if exists :tname;
+-- end_ignore
+
+create table :tname
+     ( tag :tagtype
+     , ts timestamp
+     , c1 int
+     , c2 float
+     , c3 text
+     )
+ using mars
+ :with
+ distributed masteronly;
+
+-- insert the initial data, no overlaps
+insert into :tname
+select (i / 4)::text:::tagtype
+     , '2000-01-01 12:00:00'::timestamp + (i % 4 * 10)::text::interval
+     , case when i % 2 = 0 then i * 10 else null end
+     , case when i % 2 > 0 then i / 10. else null end
+     , 'text ' || i
+  from generate_series(40, 55) i;
+
+-- rows in the same block are merged during INSERT
+\i sql/mergescan.queries.template
+
+-- insert the late data, no overlaps
+insert into :tname
+select (i / 4)::text:::tagtype
+     , '2000-01-01 12:00:00'::timestamp + (i % 4 * 10)::text::interval
+     , case when i % 2 = 0 then i * 10 else null end
+     , case when i % 2 > 0 then i / 10. else null end
+     , 'text ' || i
+  from generate_series(32, 39) i;
+
+-- blocks are not merged
+\i sql/mergescan.queries.template
+
+-- insert the late data, the blocks overlap, the rows do not
+insert into :tname
+select (i / 4)::text:::tagtype
+     , '2000-01-01 12:00:00'::timestamp + (i % 4 * 10 + 40)::text::interval
+     , case when i % 2 = 0 then i * 10 else null end
+     , case when i % 2 > 0 then i / 10. else null end
+     , 'text ' || i
+  from generate_series(40, 55) i;
+
+-- blocks are merged on the group keys
+\i sql/mergescan.queries.template
+
+-- insert the late data, both the blocks and rows overlap
+insert into :tname
+select (i / 4)::text:::tagtype
+     , '2000-01-01 12:00:00'::timestamp + (i % 4 * 10)::text::interval
+     , case when i % 8 < 4 then 1000 + i * 10 else null end
+     , case when i % 8 > 3 then 1000 + i / 10. else null end
+     , 'text ' || (1000 + i)
+  from generate_series(40, 47) i;
+
+-- blocks and orws are merged on the group keys
+\i sql/mergescan.queries.template
+
+-- vi: syntax=sql et :

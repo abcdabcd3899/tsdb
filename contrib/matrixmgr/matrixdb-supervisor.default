@@ -1,0 +1,6 @@
+MXHOME=/usr/local/matrixdb
+CONF=/etc/matrixdb/supervisor.conf
+MXLOGDIR=/var/log/matrixdb
+
+export MXHOME
+export MXLOGDIR

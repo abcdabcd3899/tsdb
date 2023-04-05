@@ -1,0 +1,301 @@
+-- start_ignore
+drop table heap;
+ERROR:  table "heap" does not exist
+drop table mars;
+ERROR:  table "mars" does not exist
+create extension mars;
+-- end_ignore
+create table heap (tag int, ts timestamp, col1 int, col2 float);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+create table mars (tag int, ts timestamp, col1 int, col2 float) using mars;
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder | grpOpt | grpWithParamOpt | grpParam 
+------------+-------------+--------+-----------------+----------
+            |             |        |                 | 
+(1 row)
+
+drop table mars;
+-- Accurate grammar
+create table mars (tag int, ts timestamp, col1 int, col2 float) using mars
+with(group_col_ = "{tag}", group_param_col_ = "{ts in 1 min}", global_order_col_ = "{tag, ts}", local_order_col_ = "{ts}");
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder | grpOpt | grpWithParamOpt |  grpParam  
+------------+-------------+--------+-----------------+------------
+ {2}        | {1,2}       | {1}    | {2}             | {60000000}
+(1 row)
+
+\d+ mars;
+                                             Table "public.mars"
+ Column |            Type             | Collation | Nullable | Default | Storage | Stats target | Description 
+--------+-----------------------------+-----------+----------+---------+---------+--------------+-------------
+ col1   | integer                     |           |          |         | plain   |              | 
+ col2   | double precision            |           |          |         | plain   |              | 
+ tag    | integer                     |           | not null |         | plain   |              | 
+ ts     | timestamp without time zone |           | not null |         | plain   |              | 
+Options: group_col_={tag}, group_param_col_={ts in 1 min}, global_order_col_={tag, ts}, local_order_col_={ts}
+
+drop table mars;
+create table mars (like heap) using mars
+with(group_col_ = "{tag}", group_param_col_ = "{ts in 1 min}", global_order_col_ = "{tag, ts}", local_order_col_ = "{ts}");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder | grpOpt | grpWithParamOpt |  grpParam  
+------------+-------------+--------+-----------------+------------
+ {2}        | {1,2}       | {1}    | {2}             | {60000000}
+(1 row)
+
+drop table mars;
+-- Simple grammar
+create table mars (tag int, ts timestamp, col1 int, col2 float) using mars
+with(tagkey = "tag", timekey= "ts", timebucket= "1 min");
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder | grpOpt | grpWithParamOpt |  grpParam  
+------------+-------------+--------+-----------------+------------
+ {2}        |             | {1}    | {2}             | {60000000}
+(1 row)
+
+\d+ mars;
+                                             Table "public.mars"
+ Column |            Type             | Collation | Nullable | Default | Storage | Stats target | Description 
+--------+-----------------------------+-----------+----------+---------+---------+--------------+-------------
+ col1   | integer                     |           |          |         | plain   |              | 
+ col2   | double precision            |           |          |         | plain   |              | 
+ tag    | integer                     |           | not null |         | plain   |              | 
+ ts     | timestamp without time zone |           | not null |         | plain   |              | 
+Options: tagkey=tag, timekey=ts, timebucket=1 min
+
+drop table mars;
+create table mars (like heap) using mars
+with(tagkey = "tag", timekey= "ts", timebucket= "1 min");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder | grpOpt | grpWithParamOpt |  grpParam  
+------------+-------------+--------+-----------------+------------
+ {2}        |             | {1}    | {2}             | {60000000}
+(1 row)
+
+drop table mars;
+create table mars (like heap) using mars
+with(timekey= "ts", timebucket= "1 min");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder | grpOpt | grpWithParamOpt |  grpParam  
+------------+-------------+--------+-----------------+------------
+ {2}        |             |        | {2}             | {60000000}
+(1 row)
+
+drop table mars;
+create table mars (like heap) using mars
+with(tagkey = "tag");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder | grpOpt | grpWithParamOpt | grpParam 
+------------+-------------+--------+-----------------+----------
+            |             | {1}    |                 | 
+(1 row)
+
+drop table mars;
+create table mars (like heap) using mars
+with(tagkey = tag);
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+drop table mars;
+create table mars (like heap) using mars
+with(tagkey = "tag", timekey= "ts");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder | grpOpt | grpWithParamOpt | grpParam 
+------------+-------------+--------+-----------------+----------
+ {2}        |             | {1,2}  |                 | 
+(1 row)
+
+\d+ mars;
+                                             Table "public.mars"
+ Column |            Type             | Collation | Nullable | Default | Storage | Stats target | Description 
+--------+-----------------------------+-----------+----------+---------+---------+--------------+-------------
+ col1   | integer                     |           |          |         | plain   |              | 
+ col2   | double precision            |           |          |         | plain   |              | 
+ tag    | integer                     |           | not null |         | plain   |              | 
+ ts     | timestamp without time zone |           | not null |         | plain   |              | 
+Options: tagkey=tag, timekey=ts
+
+drop table mars;
+create table mars (like heap) using mars
+with(tagkey = "{tag}", timekey = "ts");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder | grpOpt | grpWithParamOpt | grpParam 
+------------+-------------+--------+-----------------+----------
+ {2}        |             | {1,2}  |                 | 
+(1 row)
+
+drop table mars;
+-- space char before and after curly braces can be omitted 
+create table mars (like heap) using mars
+with(tagkey = " {tag} ", timekey = "ts");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+drop table mars;
+create table mars (tag int, tag1 int, tag2 int, ts timestamp, col1 float) using mars
+with(tagkey = "{tag, tag1 , tag2}", timekey = "ts");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder |  grpOpt   | grpWithParamOpt | grpParam 
+------------+-------------+-----------+-----------------+----------
+ {4}        |             | {1,2,3,4} |                 | 
+(1 row)
+
+drop table mars;
+create table mars (tag int, "tag{" int, ts timestamp, col1 float) using mars
+with(tagkey = "tag{", timekey = "ts");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+drop table mars;
+-- '{' is a valid char for column, but should be included by "" in tagkey definition 
+create table mars (tag int, "tag{" int, ts timestamp, col1 float) using mars
+with(tagkey = '{tag, "tag{"}', timekey = "ts");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+drop table mars;
+create table mars (c1 int, c2 float) using mars
+with (global_order_col_ = "{c2}", local_order_col_ = "{c2}")
+distributed by (c1);
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder | grpOpt | grpWithParamOpt | grpParam 
+------------+-------------+--------+-----------------+----------
+ {2}        | {2}         |        |                 | 
+(1 row)
+
+drop table mars;
+create table mars (c1 int, c2 real) using mars
+with (global_order_col_ = "{c2}", local_order_col_ = "{c2}")
+distributed by (c1);
+select "localOrder", "globalOrder", "grpOpt", "grpWithParamOpt", "grpParam" from mx_mars;
+ localOrder | globalOrder | grpOpt | grpWithParamOpt | grpParam 
+------------+-------------+--------+-----------------+----------
+ {2}        | {2}         |        |                 | 
+(1 row)
+
+drop table mars;
+-- Failed cases
+create table mars (like heap) using mars
+with(group_col_ = "{tag}", timekey="ts", timebucket="1 min");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  MARS does not support mixed use simple grammar options with accurate grammar options
+DETAIL:  Simple grammar: tagkey, timekey, timebucket; Accurate grammar: group_col_, group_param_col_, global_order_col_, local_order_col_
+create table mars (like heap) using mars
+with(timebucket="1 min");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  timebucket option rely on timekey option to define time column
+create table mars (like heap) using mars
+with(group_col_ = "{tags}");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  "tags" is not column name. Please re-check option.
+create table mars (like heap) using mars
+with(group_param_col_ = "{tags}");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  "tags" does not contain delimiter "in"
+create table mars (like heap) using mars
+with(group_param_col_ = "{tags in 1}");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  "tags" is not column name. Please re-check option.
+create table mars (like heap) using mars
+with(group_param_col_ = "{tags in 1min }");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  "tags" is not column name. Please re-check option.
+create table mars (like heap) using mars
+with(group_order_col_= "{tags}");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  unrecognized parameter "group_order_col_"
+create table mars (like heap) using mars
+with(global_order_col_= "{tags}");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  "tags" is not column name. Please re-check option.
+create table mars (like heap) using mars
+with(local_order_col_= "{tags}");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  "tags" is not column name. Please re-check option.
+create table mars (like heap) using mars
+with(tagkey = "{tags}");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  TagKey specification error: "{tags}". Please re-check option.
+create table mars (like heap) using mars
+with(timekey = "{tags}");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  "{tags}" is not column name. Please re-check option.
+create table mars (like heap) using mars
+with(timekey = " tag");
+NOTICE:  table doesn't have 'DISTRIBUTED BY' clause, defaulting to distribution columns from LIKE table
+ERROR:  " tag" is not column name. Please re-check option.
+create table mars (tag real,ts real) using mars
+with(timekey = "{tag}");
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+ERROR:  "{tag}" is not column name. Please re-check option.
+create table mars (tag real,ts real) using mars
+with(timekey = "{ts}");
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+ERROR:  "{ts}" is not column name. Please re-check option.
+create table mars (tag float,ts float) using mars
+with(timekey = "{tag}");
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+ERROR:  "{tag}" is not column name. Please re-check option.
+create table mars (tag float,ts float) using mars
+with(timekey = "{ts}");
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+ERROR:  "{ts}" is not column name. Please re-check option.
+create table mars (tag int, ts timestamp) using mars
+with(tagkey = "tag", timekey = "tag");
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+ERROR:  timekey column "tag"'s type request to be an TIMESTAMP.
+create table mars (tag int, ts timestamp) using mars
+with(tagkey = "ts", timekey = "ts");
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+ERROR:  duplicate key value for tagkey and timekey.
+create table mars (tag int, ts timestamp) using mars
+with(group_col_ = "{tag, tag}");
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+ERROR:  group_col_ column "tag"'s is duplicated.
+create table mars (tag int, ts timestamp) using mars
+with(group_col_ = "{tag}", group_param_col_ = "{tag in 1}");
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'tag' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+ERROR:  duplicate key value in group_col_, global_order_col_ arrays.
+drop table heap;
+-- bfv: we used to trigger an assertion failure when createing a temp mars
+-- table:
+--
+--     create temp table t1 (c1 int) using mars;
+--     psql: FATAL:  Unexpected internal error (assert.c:44)
+--     DETAIL:  FailedAssertion("!(isTempOrTempToastNamespace(relnamespace))", File: "relcache.c", Line: 3405)
+--
+-- this is because we always use pg_aoseg as the namespace for the mars aux
+-- table, fixed by using the temp namespace when the main table is temp.
+create temp table mars (c1 int) using mars;
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'c1' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+drop table mars;
+-- bfv: we used to trigger an assertion failure when inserting to a mars table
+-- for the first time:
+--
+--     create temp table copytest4 (id int, id1 int) using mars;
+--     insert into copytest4 values (1,2);
+--     FATAL:  Unexpected internal error (assert.c:44)
+--     DETAIL:  FailedAssertion("!(Gp_role == GP_ROLE_UTILITY)", File: "vacuum.c", Line: 1443)
+--
+-- this is because the autostat ANALYZE happens before the tuple beging
+-- flushed, fixed by forceing the flush.
+create temp table mars (c1 int, c2 int) using mars;
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'c1' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+insert into mars values (1, 2);
+drop table mars;

@@ -1,0 +1,119 @@
+\set tnamestr '''' :tname ''''
+
+select gp_debug_set_create_table_default_numsegments(1);
+
+-- verify text and varchar(n)
+--start_ignore
+drop table if exists :tname;
+
+create table :tname (c0 int, c1 text, c2 varchar(100), c3 int8, ts timestamp) using mars
+ with (group_col_ = '{c0}', group_param_col_ = '{ts in 1 hour}') distributed by (c0);
+--end_ignore
+
+insert into :tname
+     select i/5,
+            ((i+3)%7)::text,
+            ((i+5)%7)::varchar(100),
+            i,
+            '2020-10-10 09:01:02'::timestamp + i * interval '1 second'
+       from generate_series(0, 12) i;
+
+select ctid, c0, c1, c2, c3 from :tname;
+
+\out /dev/null
+select segrelid as aux_table_oid
+     , segrelid::regclass::name as aux_table_name
+  from mx_mars
+ where relid = :tnamestr::regclass;
+\out
+
+\gset
+\set aux_table_name_str '''' :aux_table_name ''''
+
+select sum, min_at, max_at, min, max from gp_dist_random(:aux_table_name_str);
+
+select min(c1), max(c1) from :tname;
+select min(c2), max(c2) from :tname;
+select min(c1), max(c1) from :tname where c0 = 0;
+select min(c1), max(c1) from :tname where c0 = 1;
+select min(c1), max(c1) from :tname where c0 = 2;
+select min(c2), max(c2) from :tname where c0 = 0;
+select min(c2), max(c2) from :tname where c0 = 1;
+select min(c2), max(c2) from :tname where c0 = 2;
+
+-- verify numeric and interval
+--start_ignore
+drop table if exists :tname;
+
+create table :tname (c0 int, c1 numeric, c2 interval, c3 int8, ts timestamp) using mars
+ with (group_col_ = '{c0}', group_param_col_ = '{ts in 1 hour}') distributed by (c0);
+--end_ignore
+
+insert into :tname
+     select i/5,
+            (i+3)%7,
+            make_interval(mins => ((i+5)%7)),
+            i,
+            '2020-10-10 09:01:02'::timestamp + i * interval '1 second'
+       from generate_series(0, 12) i;
+select ctid, c0, c1, c2, c3 from :tname;
+
+\out /dev/null
+select segrelid as aux_table_oid
+     , segrelid::regclass::name as aux_table_name
+  from mx_mars
+ where relid = :tnamestr::regclass;
+\out
+
+\gset
+\set aux_table_name_str '''' :aux_table_name ''''
+
+select sum, min_at, max_at, min, max from gp_dist_random(:aux_table_name_str);
+
+select min(c1), max(c1) from :tname;
+select min(c2), max(c2) from :tname;
+select min(c1), max(c1) from :tname where c0 = 0;
+select min(c1), max(c1) from :tname where c0 = 1;
+select min(c1), max(c1) from :tname where c0 = 2;
+select min(c2), max(c2) from :tname where c0 = 0;
+select min(c2), max(c2) from :tname where c0 = 1;
+select min(c2), max(c2) from :tname where c0 = 2;
+
+-- verify name and varchar
+--start_ignore
+drop table if exists :tname;
+
+create table :tname (c0 int, c1 name, c2 varchar, c3 int8, ts timestamp) using mars
+ with (group_col_ = '{c0}', group_param_col_ = '{ts in 1 hour}') distributed by (c0);
+--end_ignore
+
+insert into :tname
+     select i/5,
+            ((i+3)%7)::name,
+            ((i+5)%7)::varchar,
+            i,
+            '2020-10-10 09:01:02'::timestamp + i * interval '1 second'
+       from generate_series(0, 12) i;
+
+select ctid, c0, c1, c2, c3 from :tname;
+
+\out /dev/null
+select segrelid as aux_table_oid
+     , segrelid::regclass::name as aux_table_name
+  from mx_mars
+ where relid = :tnamestr::regclass;
+\out
+
+\gset
+\set aux_table_name_str '''' :aux_table_name ''''
+
+select sum, min_at, max_at, min, max from gp_dist_random(:aux_table_name_str);
+
+select min(c1), max(c1) from :tname;
+select min(c2), max(c2) from :tname;
+select min(c1), max(c1) from :tname where c0 = 0;
+select min(c1), max(c1) from :tname where c0 = 1;
+select min(c1), max(c1) from :tname where c0 = 2;
+select min(c2), max(c2) from :tname where c0 = 0;
+select min(c2), max(c2) from :tname where c0 = 1;
+select min(c2), max(c2) from :tname where c0 = 2;

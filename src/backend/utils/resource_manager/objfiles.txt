@@ -1,0 +1,1 @@
+src/backend/utils/resource_manager/resource_manager.o src/backend/utils/resource_manager/memquota.o

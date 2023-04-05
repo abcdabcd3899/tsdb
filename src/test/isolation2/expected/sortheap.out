@@ -1,0 +1,1975 @@
+-- start_matchsubs
+--
+-- m/^ERROR:  Error on receive from seg0.*: server closed the connection unexpectedly/
+-- s/^ERROR:  Error on receive from seg0.*: server closed the connection unexpectedly/ERROR: server closed the connection unexpectedly/
+--
+-- end_matchsubs
+
+-- start_ignore
+create extension if not exists matrixts;
+CREATE
+-- end_ignore
+
+CREATE TABLE sheap_foo(c1 text, c2 text) using sortheap;
+CREATE
+CREATE INDEX sheap_idx on sheap_foo using sortheap_btree(c1, c2);
+CREATE
+
+-- Test crash recovery
+-- init_tape: error/crash before xlog
+1: select gp_inject_fault('inittape_before_xlog', 'error', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'inittape_before_xlog' fault type:'error'  (seg0 192.168.100.10:7002 pid=78891)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('inittape_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: analyze sheap_foo;
+ANALYZE
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+ 6  | session1 
+ 8  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+-- panic
+1: select gp_inject_fault('inittape_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'inittape_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=108162)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('inittape_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+-- inittape: error/crash after xlog
+1: select gp_inject_fault('inittape_after_xlog', 'error', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'inittape_after_xlog' fault type:'error'  (seg0 192.168.100.10:7002 pid=108204)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('inittape_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+-- panic
+1: select gp_inject_fault('inittape_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'inittape_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=108204)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('inittape_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- dump_tuples: crash/error
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: select gp_inject_fault('dump_tuples_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'dump_tuples_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=113059)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('dump_tuples_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(10 rows)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(10 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(10 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: select gp_inject_fault('dump_tuples_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'dump_tuples_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=113119)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('dump_tuples_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+(10 rows)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+(10 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(10 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+-- new tapesets: crash
+1: select gp_inject_fault('new_tapesets_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  Error on receive from seg0 192.168.100.10:7002 pid=189127: server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('new_tapesets_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+ 6  | session1 
+ 8  | session1 
+(5 rows)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+1: select gp_inject_fault('new_tapesets_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'new_tapesets_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=175183)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('new_tapesets_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- new header: crash
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: select gp_inject_fault('new_tapeheader_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+ERROR:  fault triggered, fault name:'new_tapeheader_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=182931)
+1: insert into sheap_foo select i, 'session1' from generate_series(11, 15) i;
+INSERT 5
+1: select gp_inject_fault('new_tapeheader_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 5  | session1 
+ 15 | session1 
+ 1  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+(10 rows)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2 
+----+----
+(0 rows)
+1: select * from sheap_foo where c1 = '5';
+ c1 | c2       
+----+----------
+ 5  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 15 | session1 
+ 5  | session1 
+ 1  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+(10 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2 
+----+----
+(0 rows)
+1: select * from sheap_foo where c1 = '5';
+ c1 | c2       
+----+----------
+ 5  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 15 | session1 
+ 5  | session1 
+ 1  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+(10 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: select gp_inject_fault('new_tapeheader_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+ERROR:  fault triggered, fault name:'new_tapeheader_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=182997)
+1: insert into sheap_foo select i, 'session1' from generate_series(11, 15) i;
+INSERT 5
+1: select gp_inject_fault('new_tapeheader_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 5  | session1 
+ 15 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+(10 rows)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2 
+----+----
+(0 rows)
+1: select * from sheap_foo where c1 = '5';
+ c1 | c2       
+----+----------
+ 5  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 5  | session1 
+ 15 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 1  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+(10 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2 
+----+----
+(0 rows)
+1: select * from sheap_foo where c1 = '5';
+ c1 | c2       
+----+----------
+ 5  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 5  | session1 
+ 15 | session1 
+ 1  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+(10 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- new header: crash
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: select gp_inject_fault('tape_insert_flush', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+ERROR:  fault triggered, fault name:'tape_insert_flush' fault type:'panic'  (seg0 192.168.100.10:7002 pid=189336)
+1: insert into sheap_foo select i, 'session1' from generate_series(11, 15) i;
+INSERT 5
+1: select gp_inject_fault('tape_insert_flush', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 5  | session1 
+ 15 | session1 
+ 1  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+(10 rows)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2 
+----+----
+(0 rows)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 15 | session1 
+ 5  | session1 
+ 1  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+(10 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2 
+----+----
+(0 rows)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 15 | session1 
+ 5  | session1 
+ 1  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+(10 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- merge crash
+1: select gp_inject_fault('merge_done', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: insert into sheap_foo select i, 'session1' from generate_series(11, 15) i;
+INSERT 5
+-- except fail and wait at most 30 seconds
+1: select pg_sleep(10) from sheap_foo limit 3;
+ERROR:  Error on receive from seg0 slice1 192.168.100.10:7002 pid=189405: server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 15 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(15 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 15 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(15 rows)
+-- force a vacuum
+1: vacuum sheap_foo;
+VACUUM
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 9  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 15 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+(15 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- vacuum crash
+1: select gp_inject_fault('vacuum_done', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: insert into sheap_foo select i, 'session1' from generate_series(11, 15) i;
+INSERT 5
+-- except fail and wait at most 30 seconds
+1: select pg_sleep(10) from sheap_foo limit 3;
+ERROR:  Error on receive from seg0 slice1 192.168.100.10:7002 pid=193301: server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+1: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 9  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 15 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+(15 rows)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(15 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 15 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 1  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 9  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(15 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+-- re-trigger a merge and vacuum
+1: select gp_inject_fault('vacuum_done', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select gp_inject_fault('vacuum_done', 'suspend', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(16, 20) i;
+INSERT 5
+1: insert into sheap_foo select i, 'session1' from generate_series(21, 25) i;
+INSERT 5
+1: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 16 | session1 
+ 19 | session1 
+ 20 | session1 
+ 15 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 18 | session1 
+ 22 | session1 
+ 23 | session1 
+ 24 | session1 
+ 25 | session1 
+ 1  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 9  | session1 
+ 17 | session1 
+ 21 | session1 
+(25 rows)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '22';
+ c1 | c2       
+----+----------
+ 22 | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 18 | session1 
+ 22 | session1 
+ 23 | session1 
+ 24 | session1 
+ 25 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 16 | session1 
+ 19 | session1 
+ 20 | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 17 | session1 
+ 21 | session1 
+(25 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '22';
+ c1 | c2       
+----+----------
+ 22 | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 15 | session1 
+ 18 | session1 
+ 22 | session1 
+ 23 | session1 
+ 24 | session1 
+ 25 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 1  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 9  | session1 
+ 17 | session1 
+ 21 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 16 | session1 
+ 19 | session1 
+ 20 | session1 
+(25 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: select gp_wait_until_triggered_fault('vacuum_done', 1, 2);
+ gp_wait_until_triggered_fault 
+-------------------------------
+ Success:                      
+(1 row)
+1: select gp_inject_fault('vacuum_done', 'resume', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select gp_inject_fault('vacuum_done', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 17 | session1 
+ 21 | session1 
+ 16 | session1 
+ 19 | session1 
+ 2  | session1 
+ 20 | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 18 | session1 
+ 22 | session1 
+ 23 | session1 
+ 24 | session1 
+ 25 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+(25 rows)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '22';
+ c1 | c2       
+----+----------
+ 22 | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 17 | session1 
+ 21 | session1 
+ 16 | session1 
+ 19 | session1 
+ 2  | session1 
+ 20 | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 18 | session1 
+ 22 | session1 
+ 23 | session1 
+ 24 | session1 
+ 25 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+(25 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '22';
+ c1 | c2       
+----+----------
+ 22 | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 15 | session1 
+ 18 | session1 
+ 22 | session1 
+ 23 | session1 
+ 24 | session1 
+ 25 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 16 | session1 
+ 19 | session1 
+ 2  | session1 
+ 20 | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 1  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 9  | session1 
+ 17 | session1 
+ 21 | session1 
+(25 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- freespace: allocate crash
+1: select gp_inject_fault('freepage_alloc_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'freepage_alloc_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=186893)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('freepage_alloc_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+1: select gp_inject_fault('freepage_alloc_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'freepage_alloc_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=186953)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('freepage_alloc_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- freespace: newleaf crash
+1: select gp_inject_fault('newleaf_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'newleaf_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=187009)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('newleaf_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+1: select gp_inject_fault('newleaf_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'newleaf_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=187061)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('newleaf_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 6  | session1 
+ 8  | session1 
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- freespace: newroot crash
+1: select gp_inject_fault('newroot_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'newroot_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=187104)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('newroot_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 7  | session1 
+ 6  | session1 
+ 8  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+1: select gp_inject_fault('newroot_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'newroot_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=187166)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('newroot_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 10 | session1 
+ 9  | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- freespace: recycle crash
+1: select gp_inject_fault('freepage_recycle', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+-- except fail and wait at most 30 seconds
+1: select pg_sleep(10) from sheap_foo limit 3;
+ERROR:  Error on receive from seg0 slice1 192.168.100.10:7002 pid=187213: server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+1: insert into sheap_foo select i, 'session1' from generate_series(11, 15) i;
+INSERT 5
+1: set enable_indexscan to off;
+SET
+1: set enable_bitmapscan to off;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '11';
+ c1 | c2       
+----+----------
+ 11 | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(15 rows)
+1: set enable_seqscan to off;
+SET
+1: set enable_indexscan to on;
+SET
+1: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+1: select * from sheap_foo where c1 = '11';
+ c1 | c2       
+----+----------
+ 11 | session1 
+(1 row)
+1: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 15 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(15 rows)
+1: reset enable_indexscan;
+RESET
+1: reset enable_bitmapscan;
+RESET
+1: reset enable_seqscan;
+RESET
+1: TRUNCATE sheap_foo;
+TRUNCATE

@@ -1,0 +1,81 @@
+create table :tname
+     ( batch int default 0
+     , c1 float4
+     , c2 float8
+     , c3 int4
+     , c4 int8
+     )
+ using mars
+  with ( global_order_col_ = :global_order_cols
+       , local_order_col_  = :local_order_cols
+       , group_col_        = :group_cols
+       , group_param_col_  = :group_param_cols
+       )
+ distributed by (batch)
+;
+
+--
+-- verify the aux relation and aux indexes
+--
+
+\set tnamestr '''' :tname ''''
+
+-- get the aux relname
+\out /dev/null
+select segrelid as auxrelid
+  from mx_mars
+ where relid = :tnamestr::regclass;
+\out
+\gset
+
+-- list the aux columns for indexes
+select attname
+     , atttypid::regtype
+  from pg_attribute
+ where attrelid = :auxrelid
+   and attname like 'attr%'
+ order by attnum;
+
+-- list aux indexes, the names differ every run, so only show the count
+select count(indexrelid)
+  from pg_index
+ where indrelid = :auxrelid;
+
+-- list the aux index columns
+select a.attname
+     , a.atttypid::regtype
+  from pg_index as i
+  join pg_attribute as a
+    on i.indexrelid = a.attrelid
+ where indrelid = :auxrelid;
+
+-- insert data
+insert into :tname
+select 0 as batch
+     , i / 8 % 2
+     , i / 4 % 2
+     , i / 2 % 2
+     , i / 1 % 2
+  from generate_series(0, 15) i
+;
+
+-- verify the grouping
+select ctid, c1, c2, c3, c4 from :tname;
+
+-- use all the quals as scankeys
+select c1, c2, c3, c4 from :tname where c1 > 0;
+select c1, c2, c3, c4 from :tname where c1 > 0 and c2 < 1;
+select c1, c2, c3, c4 from :tname where c1 > 0 and c2 < 1 and c3 > 0;
+select c1, c2, c3, c4 from :tname where c1 > 0 and c2 < 1 and c3 > 0 and c4 < 1;
+
+-- use some of the quals as filters
+select c1, c2, c3, c4 from :tname where c1 > 0 and c3 > 0 and c4 < 1;
+select c1, c2, c3, c4 from :tname where c2 < 1 and c3 > 0 and c4 < 1;
+
+-- array keys and array filters
+select c1, c2, c3, c4 from :tname where c1 in ( 1, 2 );
+select c1, c2, c3, c4 from :tname where c1 in ( 1, 2 ) and c2 in ( 0, 3 );
+select c1, c2, c3, c4 from :tname where c1 in ( 1, 2 ) and c2 in ( 0, 3 ) and c3 in ( 1, 1 );
+select c1, c2, c3, c4 from :tname where c1 in ( 1, 2 ) and c2 in ( 0, 3 ) and c3 in ( 1, 1 ) and c4 in ( 4, 0 );
+
+-- vi: syntax=sql et :

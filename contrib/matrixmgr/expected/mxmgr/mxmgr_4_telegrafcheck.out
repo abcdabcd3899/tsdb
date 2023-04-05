@@ -1,0 +1,52 @@
+\c matrixmgr
+SELECT proargnames, prosrc FROM pg_proc WHERE  proname = 'mxmgr_telegraf_deploy';
+        proargnames        |                                               prosrc                                               
+---------------------------+----------------------------------------------------------------------------------------------------
+ {schema_name,is_validate} |                                                                                                   +
+                           | DECLARE                                                                                           +
+                           |     tmp RECORD;                                                                                   +
+                           |     args text;                                                                                    +
+                           |     val text;                                                                                     +
+                           |     db_path text;                                                                                 +
+                           | BEGIN                                                                                             +
+                           |     EXECUTE format('SET search_path TO %I', schema_name);                                         +
+                           |     args := 'telegraf deploy ';                                                                   +
+                           |     FOR tmp IN SELECT key, CASE WHEN value = '' THEN '""' ELSE value END                          +
+                           |         FROM matrix_manager_config WHERE category = 'db' LOOP                                     +
+                           |             args := CONCAT(args, ' --', tmp.key, ' ', tmp.value);                                 +
+                           |         END LOOP;                                                                                 +
+                           |     SELECT value INTO val FROM matrix_manager_config WHERE category = 'gate' AND key = 'host';    +
+                           |     args := CONCAT(args, ' --gatehost ', val);                                                    +
+                           |     SELECT value INTO val FROM matrix_manager_config WHERE category = 'gate' AND key = 'postport';+
+                           |     args := CONCAT(args, ' --gateport ', val);                                                    +
+                           |     args := CONCAT(args, ' --schemaname ', schema_name);                                          +
+                           |     IF is_validate=true THEN                                                                      +
+                           |         args := CONCAT(args, ' --validate');                                                      +
+                           |     END IF;                                                                                       +
+                           |     PERFORM matrixmgr_internal.mxmgr_cmd_run('mxctl', args, 'telegraf');                          +
+                           |                                                                                                   +
+                           |     RESET search_path;                                                                            +
+                           |     RETURN true;                                                                                  +
+                           | END;                                                                                              +
+                           | 
+(1 row)
+
+SELECT proargnames, prosrc FROM pg_proc WHERE  proname = 'mxmgr_remove_telegraf';
+  proargnames  |                                                                    prosrc                                                                    
+---------------+----------------------------------------------------------------------------------------------------------------------------------------------
+ {schema_name} |                                                                                                                                             +
+               | DECLARE                                                                                                                                     +
+               |     tmp RECORD;                                                                                                                             +
+               |     args text;                                                                                                                              +
+               | BEGIN                                                                                                                                       +
+               |     EXECUTE format('SET search_path TO %I', schema_name);                                                                                   +
+               |     FOR tmp IN SELECT key, CASE WHEN value = '' THEN '""' ELSE value END FROM matrix_manager_config WHERE category IN ('db', 'metrics') LOOP+
+               |         args := CONCAT(args, ' --', tmp.key, ' ', tmp.value);                                                                               +
+               |     END LOOP;                                                                                                                               +
+               |     EXECUTE format('COPY (SELECT 1) TO PROGRAM ''mxctl telegraf remove %s'';', args);                                                       +
+               |     RESET search_path;                                                                                                                      +
+               |     RETURN true;                                                                                                                            +
+               | END;                                                                                                                                        +
+               | 
+(1 row)
+

@@ -1,0 +1,1578 @@
+-- start_matchsubs
+--
+-- m/^ERROR:  Error on receive from seg0.*: server closed the connection unexpectedly/
+-- s/^ERROR:  Error on receive from seg0.*: server closed the connection unexpectedly/ERROR: server closed the connection unexpectedly/
+--
+-- end_matchsubs
+
+-- start_ignore
+create extension if not exists matrixts;
+CREATE
+-- end_ignore
+
+--
+-- MVCC tests
+--
+CREATE TABLE cv_foo(c1 text, c2 text);
+CREATE
+CREATE VIEW cv_cv with (continuous) AS SELECT c2, c1 FROM cv_foo GROUP BY c2, c1;
+CREATE
+
+1: BEGIN;
+BEGIN
+1: insert into cv_foo values (1, 'session1');
+INSERT 1
+1: insert into cv_foo values (2, 'session1');
+INSERT 1
+2: BEGIN;
+BEGIN
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+1: COMMIT;
+COMMIT
+2: SELECT * from cv_foo;
+ c1 | c2       
+----+----------
+ 2  | session1 
+ 1  | session1 
+(2 rows)
+2: SELECT * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 1  
+ session1 | 2  
+(2 rows)
+2: COMMIT;
+COMMIT
+1: TRUNCATE cv_foo;
+TRUNCATE
+2: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+
+1: BEGIN;
+BEGIN
+1: insert into cv_foo values (1, 'session1');
+INSERT 1
+1: insert into cv_foo values (2, 'session1');
+INSERT 1
+2: BEGIN;
+BEGIN
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+1: ABORT;
+ABORT
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+2: COMMIT;
+COMMIT
+1: TRUNCATE cv_foo;
+TRUNCATE
+
+-- Test isolation level read commited
+1: BEGIN;
+BEGIN
+1: insert into cv_foo values (1, 'session1');
+INSERT 1
+1: insert into cv_foo values (2, 'session1');
+INSERT 1
+2: BEGIN;
+BEGIN
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+3: BEGIN;
+BEGIN
+3: insert into cv_foo values (1, 'session3');
+INSERT 1
+3: insert into cv_foo values (2, 'session3');
+INSERT 1
+3: COMMIT;
+COMMIT
+2: SELECT * from cv_foo;
+ c1 | c2       
+----+----------
+ 1  | session3 
+ 2  | session3 
+(2 rows)
+2: SELECT * from cv_cv;
+ c2       | c1 
+----------+----
+ session3 | 2  
+ session3 | 1  
+(2 rows)
+2: COMMIT;
+COMMIT
+1: COMMIT;
+COMMIT
+1: TRUNCATE cv_foo;
+TRUNCATE
+2: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+
+-- Test isolation level repeatable
+1: BEGIN;
+BEGIN
+1: insert into cv_foo values (1, 'session1');
+INSERT 1
+1: insert into cv_foo values (2, 'session1');
+INSERT 1
+2: BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+BEGIN
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+3: BEGIN;
+BEGIN
+3: insert into cv_foo values (1, 'session3');
+INSERT 1
+3: insert into cv_foo values (2, 'session3');
+INSERT 1
+3: COMMIT;
+COMMIT
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+2: COMMIT;
+COMMIT
+1: COMMIT;
+COMMIT
+1: TRUNCATE cv_foo;
+TRUNCATE
+2: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+
+-- Test subtransaction
+1: BEGIN;
+BEGIN
+1: insert into cv_foo values (1, 'session1');
+INSERT 1
+1: insert into cv_foo values (2, 'session1');
+INSERT 1
+2: BEGIN;
+BEGIN
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+1: savepoint s1;
+SAVEPOINT
+1: insert into cv_foo values (3, 'session1');
+INSERT 1
+1: insert into cv_foo values (4, 'session1');
+INSERT 1
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+1: savepoint s1_sub;
+SAVEPOINT
+1: insert into cv_foo values (5, 'session1');
+INSERT 1
+1: insert into cv_foo values (6, 'session1');
+INSERT 1
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+1: release savepoint s1_sub;
+RELEASE
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+1: release savepoint s1;
+RELEASE
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+1: savepoint s1;
+SAVEPOINT
+1: insert into cv_foo values (7, 'session1');
+INSERT 1
+1: insert into cv_foo values (8, 'session1');
+INSERT 1
+2: SELECT * from cv_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: SELECT * from cv_cv;
+ c2 | c1 
+----+----
+(0 rows)
+1: rollback to s1;
+ROLLBACK
+1: COMMIT;
+COMMIT
+2: SELECT * from cv_foo;
+ c1 | c2       
+----+----------
+ 5  | session1 
+ 6  | session1 
+ 1  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+(6 rows)
+2: SELECT * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 1  
+ session1 | 4  
+ session1 | 3  
+ session1 | 5  
+ session1 | 2  
+ session1 | 6  
+(6 rows)
+2: SELECT * from cv_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 5  | session1 
+ 6  | session1 
+(6 rows)
+2: SELECT * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 5  
+ session1 | 2  
+ session1 | 6  
+ session1 | 1  
+ session1 | 4  
+ session1 | 3  
+(6 rows)
+2: COMMIT;
+COMMIT
+1: TRUNCATE cv_foo;
+TRUNCATE
+2: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+
+-- Test crash recovery
+-- init_tape: error/crash before xlog
+1: select gp_inject_fault('inittape_before_xlog', 'error', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'inittape_before_xlog' fault type:'error'  (seg0 192.168.100.10:7002 pid=230786)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('inittape_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+ session1 | 7  
+ session1 | 6  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+1: select gp_inject_fault('inittape_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'inittape_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=230786)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('inittape_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+ session1 | 7  
+ session1 | 6  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+-- inittape: error/crash after xlog
+1: select gp_inject_fault('inittape_after_xlog', 'error', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'inittape_after_xlog' fault type:'error'  (seg0 192.168.100.10:7002 pid=230887)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('inittape_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 7  
+ session1 | 6  
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+1: select gp_inject_fault('inittape_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'inittape_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=230938)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('inittape_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 7  
+ session1 | 6  
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+
+-- dump_tuples: crash/error
+1: select gp_inject_fault('dump_tuples_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'dump_tuples_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=230978)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('dump_tuples_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 7  | session1 
+ 9  | session1 
+ 10 | session1 
+ 6  | session1 
+ 8  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 10 
+ session1 | 9  
+ session1 | 8  
+ session1 | 7  
+ session1 | 6  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+1: select gp_inject_fault('dump_tuples_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'dump_tuples_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231028)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('dump_tuples_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 9  | session1 
+ 10 | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 7  
+ session1 | 6  
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+-- new tapesort: crash
+1: select gp_inject_fault('new_tapesort_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'new_tapesort_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231074)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('new_tapesort_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 9  | session1 
+ 10 | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+ session1 | 7  
+ session1 | 6  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+1: select gp_inject_fault('new_tapesort_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'new_tapesort_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231115)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('new_tapesort_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 9  | session1 
+ 10 | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 7  
+ session1 | 6  
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+-- new header: crash
+1: select gp_inject_fault('new_tapeheader_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'new_tapeheader_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231163)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('new_tapeheader_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 9  | session1 
+ 10 | session1 
+ 7  | session1 
+ 6  | session1 
+ 8  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+ session1 | 7  
+ session1 | 6  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+1: select gp_inject_fault('new_tapeheader_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'new_tapeheader_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231208)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('new_tapeheader_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+ session1 | 7  
+ session1 | 6  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+-- crash before data flush
+1: select gp_inject_fault('tape_insert_flush', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'tape_insert_flush' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231251)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('tape_insert_flush', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 9  | session1 
+ 10 | session1 
+ 7  | session1 
+ 6  | session1 
+ 8  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 7  
+ session1 | 6  
+ session1 | 10 
+ session1 | 9  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+-- merge crash
+1: select gp_inject_fault('merge_done', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: insert into cv_foo select i, 'session1' from generate_series(11, 15) i;
+INSERT 5
+-- except fail and wait at most 20 seconds
+1: select pg_sleep(10) from cv_foo limit 2;
+ERROR:  Error on receive from seg0 slice1 192.168.100.10:7002 pid=129664: server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 9  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+(15 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 1  
+ session1 | 4  
+ session1 | 13 
+ session1 | 3  
+ session1 | 5  
+ session1 | 10 
+ session1 | 9  
+ session1 | 15 
+ session1 | 2  
+ session1 | 7  
+ session1 | 14 
+ session1 | 12 
+ session1 | 11 
+ session1 | 6  
+(15 rows)
+1: select gp_inject_fault('merge_done', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select gp_inject_fault('merge_done', 'suspend', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(16, 20) i;
+INSERT 5
+1: insert into cv_foo select i, 'session1' from generate_series(21, 25) i;
+INSERT 5
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 9  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 17 | session1 
+ 21 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+ 18 | session1 
+ 22 | session1 
+ 23 | session1 
+ 24 | session1 
+ 25 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 16 | session1 
+ 19 | session1 
+ 20 | session1 
+(25 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 1  
+ session1 | 4  
+ session1 | 13 
+ session1 | 22 
+ session1 | 3  
+ session1 | 5  
+ session1 | 10 
+ session1 | 17 
+ session1 | 21 
+ session1 | 9  
+ session1 | 15 
+ session1 | 23 
+ session1 | 25 
+ session1 | 18 
+ session1 | 2  
+ session1 | 16 
+ session1 | 7  
+ session1 | 20 
+ session1 | 14 
+ session1 | 12 
+ session1 | 11 
+ session1 | 24 
+ session1 | 19 
+ session1 | 6  
+(25 rows)
+1: select gp_wait_until_triggered_fault('merge_done', 1, 2);
+ gp_wait_until_triggered_fault 
+-------------------------------
+ Success:                      
+(1 row)
+1: select gp_inject_fault('merge_done', 'resume', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select gp_inject_fault('merge_done', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 9  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 17 | session1 
+ 21 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 16 | session1 
+ 19 | session1 
+ 20 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+ 18 | session1 
+ 22 | session1 
+ 23 | session1 
+ 24 | session1 
+ 25 | session1 
+(25 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 1  
+ session1 | 4  
+ session1 | 13 
+ session1 | 22 
+ session1 | 3  
+ session1 | 5  
+ session1 | 10 
+ session1 | 17 
+ session1 | 21 
+ session1 | 9  
+ session1 | 15 
+ session1 | 23 
+ session1 | 25 
+ session1 | 18 
+ session1 | 2  
+ session1 | 16 
+ session1 | 7  
+ session1 | 20 
+ session1 | 14 
+ session1 | 12 
+ session1 | 11 
+ session1 | 24 
+ session1 | 19 
+ session1 | 6  
+(25 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+-- vacuum crash
+1: select gp_inject_fault('vacuum_done', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: insert into cv_foo select i, 'session1' from generate_series(11, 15) i;
+INSERT 5
+-- except fail and wait at most 20 seconds
+1: select pg_sleep(10) from cv_foo limit 2;
+ pg_sleep 
+----------
+          
+          
+(2 rows)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 9  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+(15 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 1  
+ session1 | 4  
+ session1 | 13 
+ session1 | 3  
+ session1 | 5  
+ session1 | 10 
+ session1 | 9  
+ session1 | 15 
+ session1 | 2  
+ session1 | 7  
+ session1 | 14 
+ session1 | 12 
+ session1 | 11 
+ session1 | 6  
+(15 rows)
+1: select gp_inject_fault('vacuum_done', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select gp_inject_fault('vacuum_done', 'suspend', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(16, 20) i;
+INSERT 5
+1: insert into cv_foo select i, 'session1' from generate_series(21, 25) i;
+INSERT 5
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 9  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 17 | session1 
+ 21 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+ 18 | session1 
+ 22 | session1 
+ 23 | session1 
+ 24 | session1 
+ 25 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 16 | session1 
+ 19 | session1 
+ 20 | session1 
+(25 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 1  
+ session1 | 4  
+ session1 | 13 
+ session1 | 22 
+ session1 | 3  
+ session1 | 5  
+ session1 | 10 
+ session1 | 17 
+ session1 | 21 
+ session1 | 9  
+ session1 | 15 
+ session1 | 23 
+ session1 | 25 
+ session1 | 18 
+ session1 | 2  
+ session1 | 16 
+ session1 | 7  
+ session1 | 20 
+ session1 | 14 
+ session1 | 12 
+ session1 | 11 
+ session1 | 24 
+ session1 | 19 
+ session1 | 6  
+(25 rows)
+1: select gp_wait_until_triggered_fault('vacuum_done', 1, 2);
+ gp_wait_until_triggered_fault 
+-------------------------------
+ Success:                      
+(1 row)
+1: select gp_inject_fault('vacuum_done', 'resume', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select gp_inject_fault('vacuum_done', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 9  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 17 | session1 
+ 21 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 16 | session1 
+ 19 | session1 
+ 20 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+ 18 | session1 
+ 22 | session1 
+ 23 | session1 
+ 24 | session1 
+ 25 | session1 
+(25 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 1  
+ session1 | 4  
+ session1 | 13 
+ session1 | 22 
+ session1 | 3  
+ session1 | 5  
+ session1 | 10 
+ session1 | 17 
+ session1 | 21 
+ session1 | 9  
+ session1 | 15 
+ session1 | 23 
+ session1 | 25 
+ session1 | 18 
+ session1 | 2  
+ session1 | 16 
+ session1 | 7  
+ session1 | 20 
+ session1 | 14 
+ session1 | 12 
+ session1 | 11 
+ session1 | 24 
+ session1 | 19 
+ session1 | 6  
+(25 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+-- freespace: allocate crash
+1: select gp_inject_fault('freepage_alloc_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'freepage_alloc_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231428)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('freepage_alloc_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select matrixts_internal.info_continuous_view('cv_cv');
+ info_continuous_view                                                                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ gp_segment_id: 0,size: 120 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: initial, totalRuns 0, level 0
+       
+ gp_segment_id: 1,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+ gp_segment_id: 2,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+(3 rows)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 9  | session1 
+ 10 | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 10 
+ session1 | 9  
+ session1 | 8  
+ session1 | 7  
+ session1 | 6  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+1: select gp_inject_fault('freepage_alloc_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'freepage_alloc_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231498)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('freepage_alloc_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select matrixts_internal.info_continuous_view('cv_cv');
+ info_continuous_view                                                                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ gp_segment_id: 1,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+ gp_segment_id: 0,size: 120 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: initial, totalRuns 0, level 0
+       
+ gp_segment_id: 2,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+(3 rows)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 7  | session1 
+ 9  | session1 
+ 10 | session1 
+ 6  | session1 
+ 8  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+ session1 | 7  
+ session1 | 6  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+-- freespace: newleaf crash
+1: select gp_inject_fault('newleaf_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'newleaf_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231547)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('newleaf_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select matrixts_internal.info_continuous_view('cv_cv');
+ info_continuous_view                                                                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ gp_segment_id: 2,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+ gp_segment_id: 0,size: 120 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: initial, totalRuns 0, level 0
+       
+ gp_segment_id: 1,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+(3 rows)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 9  | session1 
+ 10 | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 7  
+ session1 | 6  
+ session1 | 10 
+ session1 | 9  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+1: select gp_inject_fault('newleaf_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'newleaf_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231592)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('newleaf_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select matrixts_internal.info_continuous_view('cv_cv');
+ info_continuous_view                                                                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ gp_segment_id: 0,size: 120 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: initial, totalRuns 0, level 0
+       
+ gp_segment_id: 1,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+ gp_segment_id: 2,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+(3 rows)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 9  | session1 
+ 10 | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 7  
+ session1 | 6  
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+(5 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+-- freespace: newroot crash
+1: select gp_inject_fault('newroot_before_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'newroot_before_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231641)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('newroot_before_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 9  | session1 
+ 10 | session1 
+ 7  | session1 
+ 6  | session1 
+ 8  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 7  
+ session1 | 6  
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+(5 rows)
+1: select matrixts_internal.info_continuous_view('cv_cv');
+ info_continuous_view                                                                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ gp_segment_id: 0,size: 120 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: initial, totalRuns 0, level 0
+       
+ gp_segment_id: 2,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+ gp_segment_id: 1,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+(3 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+1: select gp_inject_fault('newroot_after_xlog', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+ERROR:  fault triggered, fault name:'newroot_after_xlog' fault type:'panic'  (seg0 192.168.100.10:7002 pid=231687)
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_inject_fault('newroot_alloc_after_xlog', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 9  | session1 
+ 10 | session1 
+ 6  | session1 
+ 8  | session1 
+ 7  | session1 
+(5 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 7  
+ session1 | 6  
+ session1 | 8  
+ session1 | 10 
+ session1 | 9  
+(5 rows)
+1: select matrixts_internal.info_continuous_view('cv_cv');
+ info_continuous_view                                                                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ gp_segment_id: 0,size: 120 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: initial, totalRuns 0, level 0
+       
+ gp_segment_id: 2,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+ gp_segment_id: 1,size: 200 KB
+tapesort[0]: status: building runs, totalRuns 1, level 1
+tapesort[1]: status: building runs, totalRuns 1, level 1
+ 
+(3 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)
+-- freespace: recycle crash
+1: select gp_inject_fault('freepage_recycle', 'panic', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: insert into cv_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: insert into cv_foo select i, 'session1' from generate_series(11, 15) i;
+INSERT 5
+-- except fail and wait at most 20 seconds
+1: select pg_sleep(10) from cv_foo limit 2;
+ pg_sleep 
+----------
+          
+          
+(2 rows)
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 1  | session1 
+ 9  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+(15 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 5  
+ session1 | 10 
+ session1 | 9  
+ session1 | 15 
+ session1 | 2  
+ session1 | 7  
+ session1 | 14 
+ session1 | 12 
+ session1 | 11 
+ session1 | 6  
+ session1 | 8  
+ session1 | 1  
+ session1 | 4  
+ session1 | 13 
+ session1 | 3  
+(15 rows)
+1: select gp_inject_fault('freepage_recycle', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into cv_foo select i, 'session1' from generate_series(16, 20) i;
+INSERT 5
+1: select * from cv_foo;
+ c1 | c2       
+----+----------
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 16 | session1 
+ 19 | session1 
+ 20 | session1 
+ 1  | session1 
+ 9  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 17 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 15 | session1 
+ 18 | session1 
+(20 rows)
+1: select * from cv_cv;
+ c2       | c1 
+----------+----
+ session1 | 8  
+ session1 | 1  
+ session1 | 4  
+ session1 | 13 
+ session1 | 3  
+ session1 | 5  
+ session1 | 10 
+ session1 | 17 
+ session1 | 9  
+ session1 | 15 
+ session1 | 18 
+ session1 | 2  
+ session1 | 16 
+ session1 | 7  
+ session1 | 20 
+ session1 | 14 
+ session1 | 12 
+ session1 | 11 
+ session1 | 19 
+ session1 | 6  
+(20 rows)
+1: TRUNCATE cv_foo;
+TRUNCATE
+1: select matrixts_internal.truncate_continuous_view('cv_cv');
+ truncate_continuous_view 
+--------------------------
+ t                        
+(1 row)

@@ -1,0 +1,5 @@
+comment = 'Matrix Append-only Resilient Storage'
+default_version = '1.5'
+module_pathname = '$libdir/mars'
+relocatable = true
+requires = 'matrixts'

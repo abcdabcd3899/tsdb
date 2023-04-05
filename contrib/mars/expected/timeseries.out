@@ -1,0 +1,59 @@
+-- start_ignore
+CREATE EXTENSION IF NOT EXISTS mars;
+NOTICE:  extension "mars" already exists, skipping
+CREATE extension IF NOT EXISTS gp_debug_numsegments;
+NOTICE:  extension "gp_debug_numsegments" already exists, skipping
+SELECT gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+create or replace function footer_total(relname text) returns float8 as $$
+declare
+  aosegname text;
+  tupcount float8 := 0;
+  rc int := 0;
+begin
+
+  execute 'select relname from pg_class where oid=(select segrelid from pg_class, mx_mars where relname=''' || relname || ''' and relid = pg_class.oid)' into aosegname;
+  if aosegname is not null then
+          execute 'select count(*) from gp_dist_random(''pg_aoseg.' || aosegname || ''')' into tupcount;
+  end if;
+  return tupcount;
+end; $$ language plpgsql volatile READS SQL DATA;
+-- end_ignore
+CREATE TABLE foo(ts timestamp, tag int, a int) using mars with (group_param_col_ = "{ts in 1 mins}");
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'ts' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+INSERT INTO foo SELECT '2010-01-01 00:00:00'::TIMESTAMP + ('' || i * 20)::interval, i, i * 2 FROM generate_series(1, 10) i;
+SELECT * FROM foo;
+            ts            | tag | a  
+--------------------------+-----+----
+ Fri Jan 01 00:00:20 2010 |   1 |  2
+ Fri Jan 01 00:00:40 2010 |   2 |  4
+ Fri Jan 01 00:01:00 2010 |   3 |  6
+ Fri Jan 01 00:01:20 2010 |   4 |  8
+ Fri Jan 01 00:01:40 2010 |   5 | 10
+ Fri Jan 01 00:02:00 2010 |   6 | 12
+ Fri Jan 01 00:02:20 2010 |   7 | 14
+ Fri Jan 01 00:02:40 2010 |   8 | 16
+ Fri Jan 01 00:03:00 2010 |   9 | 18
+ Fri Jan 01 00:03:20 2010 |  10 | 20
+(10 rows)
+
+SELECT footer_total('foo');
+ footer_total 
+--------------
+            4
+(1 row)
+
+TRUNCATE foo;
+INSERT INTO foo SELECT '2010-01-01 00:00:00'::TIMESTAMP + ('' || i)::interval, i, i * 2 FROM generate_series(1, 59) i;
+SELECT footer_total('foo');
+ footer_total 
+--------------
+            1
+(1 row)
+
+DROP TABLE foo;

@@ -1,0 +1,41 @@
+select ctid, * from :tname;
+
+-- order 0
+select ctid, * from :tname order by tag;
+select ctid, * from :tname order by tag, ts;
+-- order 0
+select ctid, * from :tname order by tag desc;
+select ctid, * from :tname order by tag desc, ts desc;
+-- order 0
+select ctid, * from :tname order by tag, time_bucket('20s', ts);
+-- order 0
+select ctid, * from :tname order by ts;
+-- order 0
+select ctid, * from :tname order by time_bucket('20s', ts);
+-- order 0
+select ctid, * from :tname order by time_bucket('20s', ts), tag;
+-- order 0
+select ctid, * from :tname order by c1, c2;
+
+select ctid, * from :tname where tag = '10';
+select ctid, * from :tname where ts = '2000-01-01 12:00:00';
+select ctid, * from :tname where c1 >= 400;
+select ctid, * from :tname where tag = '10' limit 2;
+
+-- the merge should be triggered even if the groupkeys are not projected
+select ctid, c1, c2, c3 from :tname;
+
+-- aggscans behave the same with seqscans
+set mars.enable_customscan to off;
+select tag, count(*) from :tname group by tag order by tag;
+select tag, count(tag) from :tname group by tag order by tag;
+select tag, count(ts) from :tname group by tag order by tag;
+select tag, count(c1) from :tname group by tag order by tag;
+
+set mars.enable_customscan to on;
+select tag, count(*) from :tname group by tag order by tag;
+select tag, count(tag) from :tname group by tag order by tag;
+select tag, count(ts) from :tname group by tag order by tag;
+select tag, count(c1) from :tname group by tag order by tag;
+
+-- vi: syntax=sql et :

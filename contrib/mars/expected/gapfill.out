@@ -1,0 +1,112 @@
+-- start_ignore
+create extension if not exists mars;
+create extension if not exists matrixts;
+set enable_partitionwise_join to on;
+set enable_partitionwise_aggregate to on;
+-- end_ignore
+create table gf (tag integer, ts timestamp, col1 integer) using mars with (tagkey = "tag", timekey = "ts", timebucket = "1 hour") distributed by (tag);
+insert into gf select i/59, '2020-01-01 08:00:00'::timestamp + i * '1 min'::interval, i from generate_series(1, 59) as i;
+insert into gf select i/59, '2020-01-01 10:00:00'::timestamp + i * '1 min'::interval, i from generate_series(1, 59) as i;
+insert into gf select i/59, '2020-01-01 12:00:00'::timestamp + i * '1 min'::interval, i from generate_series(1, 59) as i;
+explain (costs off) select time_bucket_gapfill('60 mins', ts) as tbg, sum(col1) from gf group by tbg;
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (GapfillScan)
+   ->  Finalize GroupAggregate
+         Group Key: (time_bucket_gapfill('@ 1 hour'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+         ->  Gather Motion 3:1  (slice1; segments: 3)
+               Merge Key: (time_bucket_gapfill('@ 1 hour'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+               ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(7 rows)
+
+select time_bucket_gapfill('60 mins', ts) as tbg, sum(col1) from gf group by tbg;
+           tbg            | sum  
+--------------------------+------
+ Wed Jan 01 08:00:00 2020 | 1770
+ Wed Jan 01 09:00:00 2020 | 1770
+ Wed Jan 01 10:00:00 2020 | 1770
+ Wed Jan 01 11:00:00 2020 | 1770
+ Wed Jan 01 12:00:00 2020 | 1770
+(5 rows)
+
+set mars.enable_customscan to off;
+explain (costs off) select time_bucket_gapfill('60 mins', ts) as tbg, sum(col1) from gf group by tbg;
+                                                                        QUERY PLAN                                                                         
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (GapfillScan)
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         Merge Key: (time_bucket_gapfill('@ 1 hour'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+         ->  GroupAggregate
+               Group Key: (time_bucket_gapfill('@ 1 hour'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+               ->  Sort
+                     Sort Key: (time_bucket_gapfill('@ 1 hour'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+                     ->  Redistribute Motion 3:3  (slice2; segments: 3)
+                           Hash Key: (time_bucket_gapfill('@ 1 hour'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+                           ->  Seq Scan on gf
+ Optimizer: Postgres query optimizer
+(11 rows)
+
+select time_bucket_gapfill('60 mins', ts) as tbg, sum(col1) from gf group by tbg;
+           tbg            | sum  
+--------------------------+------
+ Wed Jan 01 08:00:00 2020 | 1770
+ Wed Jan 01 09:00:00 2020 | 1770
+ Wed Jan 01 10:00:00 2020 | 1770
+ Wed Jan 01 11:00:00 2020 | 1770
+ Wed Jan 01 12:00:00 2020 | 1770
+(5 rows)
+
+reset mars.enable_customscan;
+explain (costs off) select time_bucket_gapfill('90 mins', ts) as tbg, sum(col1) from gf group by tbg;
+                                                                            QUERY PLAN                                                                             
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (GapfillScan)
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         Merge Key: (time_bucket_gapfill('@ 1 hour 30 mins'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+         ->  GroupAggregate
+               Group Key: (time_bucket_gapfill('@ 1 hour 30 mins'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+               ->  Sort
+                     Sort Key: (time_bucket_gapfill('@ 1 hour 30 mins'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+                     ->  Redistribute Motion 3:3  (slice2; segments: 3)
+                           Hash Key: (time_bucket_gapfill('@ 1 hour 30 mins'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+                           ->  Seq Scan on gf
+ Optimizer: Postgres query optimizer
+(11 rows)
+
+select time_bucket_gapfill('90 mins', ts) as tbg, sum(col1) from gf group by tbg;
+           tbg            | sum  
+--------------------------+------
+ Wed Jan 01 07:30:00 2020 | 1770
+ Wed Jan 01 09:00:00 2020 |  435
+ Wed Jan 01 10:30:00 2020 | 1335
+ Wed Jan 01 12:00:00 2020 | 1770
+(4 rows)
+
+set mars.enable_customscan to off;
+explain (costs off) select time_bucket_gapfill('90 mins', ts) as tbg, sum(col1) from gf group by tbg;
+                                                                            QUERY PLAN                                                                             
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (GapfillScan)
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         Merge Key: (time_bucket_gapfill('@ 1 hour 30 mins'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+         ->  GroupAggregate
+               Group Key: (time_bucket_gapfill('@ 1 hour 30 mins'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+               ->  Sort
+                     Sort Key: (time_bucket_gapfill('@ 1 hour 30 mins'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+                     ->  Redistribute Motion 3:3  (slice2; segments: 3)
+                           Hash Key: (time_bucket_gapfill('@ 1 hour 30 mins'::interval, ts, NULL::timestamp without time zone, NULL::timestamp without time zone))
+                           ->  Seq Scan on gf
+ Optimizer: Postgres query optimizer
+(11 rows)
+
+select time_bucket_gapfill('90 mins', ts) as tbg, sum(col1) from gf group by tbg;
+           tbg            | sum  
+--------------------------+------
+ Wed Jan 01 07:30:00 2020 | 1770
+ Wed Jan 01 09:00:00 2020 |  435
+ Wed Jan 01 10:30:00 2020 | 1335
+ Wed Jan 01 12:00:00 2020 | 1770
+(4 rows)
+
+reset mars.enable_customscan;

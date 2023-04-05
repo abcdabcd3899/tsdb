@@ -1,0 +1,1 @@
+src/backend/access/external/url.o src/backend/access/external/url_curl.o src/backend/access/external/url_file.o src/backend/access/external/url_execute.o src/backend/access/external/url_custom.o src/backend/access/external/external.o

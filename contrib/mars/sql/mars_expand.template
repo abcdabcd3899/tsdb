@@ -1,0 +1,32 @@
+-- start_ignore
+drop table if exists :tname;
+-- end_ignore
+
+create table :tname
+     ( c1 int
+     , c2 int
+     )
+ using mars
+ :withopts
+ distributed by (c1)
+;
+
+-- the first batch
+insert into :tname
+select i / 2 * 100 + 300 as c1
+     , i % 4 * 100 + 300 as c2
+  from generate_series(0, 11) i
+;
+
+select gp_segment_id, ctid, * from :tname;
+select count(*) as nrows from :tname;
+\gset
+
+-- expand table
+alter table :tname expand table;
+
+-- To verify data integrity
+select * from :tname;
+
+-- seg0 should have only partial of the data now
+select count(*) < :nrows from :tname where gp_segment_id = 0;

@@ -1,0 +1,105 @@
+\set tname test_mxkv_import_keys_t1
+\set tnamestr '''' test_mxkv_import_keys_t1 ''''
+\set keyset test_mxkv_import_keys_enum1
+\set keysetstr '''' :keyset ''''
+drop type if exists :keyset cascade;
+create type :keyset as enum ('c1', 'c2', 'c3');
+-- allow empty object
+select mxkv_import_keys('{}');
+ mxkv_import_keys 
+------------------
+(0 rows)
+
+select mxkv_import_keys('{}', true);
+ mxkv_import_keys 
+------------------
+(0 rows)
+
+select mxkv_import_keys('{}', true, :keysetstr);
+ mxkv_import_keys 
+------------------
+(0 rows)
+
+-- allow null input
+select mxkv_import_keys(null);
+ mxkv_import_keys 
+------------------
+(0 rows)
+
+-- list unknown keys in dryrun mode
+select mxkv_import_keys('{"c1":1, "c2":2, "c4":4}', true, :keysetstr);
+ mxkv_import_keys 
+------------------
+ c4
+(1 row)
+
+select mxkv_import_keys('{"c1":1, "c2":2, "c4":4}', true, :keysetstr);
+ mxkv_import_keys 
+------------------
+ c4
+(1 row)
+
+-- negative: disallow non-object json string
+select mxkv_import_keys('["c1", "c2", "c4"]');
+ERROR:  cannot call json_object_keys on an array
+CONTEXT:  PL/pgSQL function mxkv_import_keys(json,boolean,regtype) line 9 at FOR over SELECT rows
+select mxkv_import_keys('"c1"');
+ERROR:  cannot call json_object_keys on a scalar
+CONTEXT:  PL/pgSQL function mxkv_import_keys(json,boolean,regtype) line 9 at FOR over SELECT rows
+select mxkv_import_keys('null');
+ERROR:  cannot call json_object_keys on a scalar
+CONTEXT:  PL/pgSQL function mxkv_import_keys(json,boolean,regtype) line 9 at FOR over SELECT rows
+select mxkv_import_keys('');
+ERROR:  invalid input syntax for type json
+LINE 1: select mxkv_import_keys('');
+                                ^
+DETAIL:  The input string ended unexpectedly.
+CONTEXT:  JSON data, line 1: 
+select mxkv_import_keys('1');
+ERROR:  cannot call json_object_keys on a scalar
+CONTEXT:  PL/pgSQL function mxkv_import_keys(json,boolean,regtype) line 9 at FOR over SELECT rows
+select mxkv_import_keys(1);
+ERROR:  function mxkv_import_keys(integer) does not exist
+LINE 1: select mxkv_import_keys(1);
+               ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+-- actually import the unknown keys
+select mxkv_import_keys('{"c1":1, "c2":2, "c4":4}', false, :keysetstr);
+ mxkv_import_keys 
+------------------
+ c4
+(1 row)
+
+-- verify that the keys are really imported in dryrun mode
+select mxkv_import_keys('{"c1":1, "c2":2, "c4":4}', true, :keysetstr);
+ mxkv_import_keys 
+------------------
+(0 rows)
+
+-- allow special characters
+select mxkv_import_keys('{"Key with '' and \" quotes.": 1}', false, :keysetstr);
+     mxkv_import_keys     
+--------------------------
+ Key with ' and " quotes.
+(1 row)
+
+--
+-- import from a table can be done with the 2nd form of the function
+--
+drop table if exists :tname;
+NOTICE:  table "test_mxkv_import_keys_t1" does not exist, skipping
+create table :tname (id int, kv jsonb) distributed by (id);
+insert into :tname select i, '{"c1":1, "c10":10}' from generate_series(1, 2) i;
+select mxkv_import_keys(:tnamestr, 'kv', true, :keysetstr);
+ mxkv_import_keys 
+------------------
+ c10
+(1 row)
+
+select mxkv_import_keys(:tnamestr, 'kv', false, :keysetstr);
+ mxkv_import_keys 
+------------------
+ c10
+(1 row)
+
+-- vi: et :

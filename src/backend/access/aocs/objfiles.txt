@@ -1,0 +1,1 @@
+src/backend/access/aocs/aocsam_handler.o src/backend/access/aocs/aocsam.o src/backend/access/aocs/aocssegfiles.o src/backend/access/aocs/aocs_compaction.o

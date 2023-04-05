@@ -1,0 +1,108 @@
+-- start_ignore
+CREATE EXTENSION IF NOT EXISTS mars;
+NOTICE:  extension "mars" already exists, skipping
+create or replace function footer_total(relname text) returns float8 as $$
+declare
+  aosegname text;
+  tupcount float8 := 0;
+  rc int := 0;
+begin
+
+  execute 'select relname from pg_class where oid=(select segrelid from pg_class, mx_mars where relname=''' || relname || ''' and relid = pg_class.oid)' into aosegname;
+  if aosegname is not null then
+          execute 'select count(*) from gp_dist_random(''pg_aoseg.' || aosegname || ''')' into tupcount;
+  end if;
+  return tupcount;
+end; $$ language plpgsql volatile READS SQL DATA;
+create extension if not exists gp_debug_numsegments;
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+-- end_ignore
+CREATE TABLE foo (a int, b bigint) USING mars DISTRIBUTED BY(a);
+INSERT INTO foo SELECT i, i * 2 FROM GENERATE_SERIES(1, 10) i;
+SELECT COUNT(*) FROM foo;
+ count 
+-------
+    10
+(1 row)
+
+SELECT COUNT(*) FROM mx_mars;
+ count 
+-------
+     1
+(1 row)
+
+SELECT COUNT(*) FROM ((SELECT segrelid FROM mx_mars WHERE relid = 'foo'::regclass::oid)) AS T;
+ count 
+-------
+     1
+(1 row)
+
+TRUNCATE foo;
+SELECT COUNT(*) FROM foo;
+ count 
+-------
+     0
+(1 row)
+
+INSERT INTO foo SELECT i, i * 2 FROM GENERATE_SERIES(1, 10) i;
+INSERT INTO foo SELECT i, i * 2 FROM GENERATE_SERIES(1, 10) i;
+SELECT SUM(a), SUM(b) FROM foo;
+ sum | sum 
+-----+-----
+ 110 | 220
+(1 row)
+
+-- test each row group package a footer
+TRUNCATE foo;
+INSERT INTO foo SELECT i, i * 2 FROM GENERATE_SERIES(1, 20480) i;
+SELECT footer_total('foo');
+ footer_total 
+--------------
+            2
+(1 row)
+
+-- test null value
+TRUNCATE foo;
+INSERT INTO foo SELECT * FROM GENERATE_SERIES(1, 5);
+SELECT * FROM foo;
+ a | b 
+---+---
+ 1 |  
+ 2 |  
+ 3 |  
+ 4 |  
+ 5 |  
+(5 rows)
+
+DROP TABLE foo;
+SELECT COUNT(*) FROM mx_mars;
+ count 
+-------
+     0
+(1 row)
+
+\d pg_aoseg.*
+\c -
+create table test (i int, j int) using mars with (group_col_="{i}", global_order_col_="{i}", local_order_col_="{i}") distributed by (i);
+insert into test  select a / 10, a % 10 from generate_series(1, 100) as a;
+select count(i), sum(i) from test;
+ count | sum 
+-------+-----
+    11 |  55
+(1 row)
+
+CREATE TABLE check_not_null(tag INT, ts TIMESTAMP, val FLOAT4 NOT NULL) USING mars WITH(tagkey=tag, timekey=ts);
+INSERT INTO check_not_null VALUES(1, NULL, 4);
+ERROR:  null value in column "ts" violates not-null constraint
+DETAIL:  Failing row contains (1, null, 4).
+INSERT INTO check_not_null VALUES(1, '2021-10-29 10:36:00', NULL);
+ERROR:  null value in column "val" violates not-null constraint
+DETAIL:  Failing row contains (1, Fri Oct 29 10:36:00 2021, null).
+INSERT INTO check_not_null VALUES(NULL, '2021-10-29 10:36:00', 4);
+ERROR:  null value in column "tag" violates not-null constraint
+DETAIL:  Failing row contains (null, Fri Oct 29 10:36:00 2021, 4).

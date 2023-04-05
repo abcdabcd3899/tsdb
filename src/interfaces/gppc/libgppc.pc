@@ -1,0 +1,9 @@
+Name: libgppc
+Description: PostgreSQL libgppc library
+Url: http://www.postgresql.org/
+Version: 12
+Requires: 
+Requires.private: 
+Cflags: -I/home/parallels/opt/mxdb/include
+Libs: -L/home/parallels/opt/mxdb/lib -lgppc
+Libs.private:  

@@ -1,0 +1,683 @@
+-- start_ignore
+create extension if not exists gp_debug_numsegments;
+-- end_ignore
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+\set compresslevel 1
+\set nrows 1000
+\set fulltype half
+\set datatype i4
+\set kvtype json
+ \set compresstype none \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ json
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_json_none" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype lz4  \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ json
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_json_lz4" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype zstd \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ json
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_json_zstd" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+\set kvtype jsonb
+ \set compresstype none \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ jsonb
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_jsonb_none" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype lz4  \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ jsonb
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_jsonb_lz4" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype zstd \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ jsonb
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_jsonb_zstd" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+\set kvtype mxkv_text
+ \set compresstype none \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ mxkv_text
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_text_none" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype lz4  \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ mxkv_text
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_text_lz4" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype zstd \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ mxkv_text
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_text_zstd" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+\set kvtype mxkv_int4
+ \set compresstype none \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ mxkv_int4
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_int4_none" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype lz4  \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ mxkv_int4
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_int4_lz4" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype zstd \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+ kvtypestr 
+-----------
+ mxkv_int4
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_int4_zstd" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+\set kvtype mxkv_float4
+ \set compresstype none \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+  kvtypestr  
+-------------
+ mxkv_float4
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float4_none" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype lz4  \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+  kvtypestr  
+-------------
+ mxkv_float4
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float4_lz4" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype zstd \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+  kvtypestr  
+-------------
+ mxkv_float4
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float4_zstd" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+\set kvtype mxkv_float8
+ \set compresstype none \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+  kvtypestr  
+-------------
+ mxkv_float8
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float8_none" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype lz4  \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+  kvtypestr  
+-------------
+ mxkv_float8
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float8_lz4" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype zstd \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+  kvtypestr  
+-------------
+ mxkv_float8
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float8_zstd" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+\set kvtype 'mxkv_float4(2)'
+ \set compresstype none \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+   kvtypestr   
+---------------
+ mxkv_float4_2
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float4_2_none" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype lz4  \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+   kvtypestr   
+---------------
+ mxkv_float4_2
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float4_2_lz4" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype zstd \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+   kvtypestr   
+---------------
+ mxkv_float4_2
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float4_2_zstd" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+\set kvtype 'mxkv_float8(2)'
+ \set compresstype none \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+   kvtypestr   
+---------------
+ mxkv_float8_2
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float8_2_none" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype lz4  \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+   kvtypestr   
+---------------
+ mxkv_float8_2
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float8_2_lz4" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+ \set compresstype zstd \i sql/mxkv/compress.template
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+   kvtypestr   
+---------------
+ mxkv_float8_2
+(1 row)
+
+\gset
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+\set column :fulltype '_records_' :datatype
+-- create the table
+drop table if exists :tname;
+psql:sql/mxkv/compress.template:12: NOTICE:  table "test_mxkv_compress_half_i4_mxkv_float8_2_zstd" does not exist, skipping
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+-- vi: filetype=sql et :
+-- check the sizes, do not treat them as diffs
+-- start_ignore
+select relname
+     , pg_total_relation_size(oid) as total_bytes
+     , pg_size_pretty(pg_total_relation_size(oid)) as total_size
+  from pg_class c
+ where relname like 'test_mxkv_compress_%'
+ order by relname;
+                    relname                    | total_bytes | total_size 
+-----------------------------------------------+-------------+------------
+ test_mxkv_compress_half_i4_json_lz4           |    40144960 | 38 MB
+ test_mxkv_compress_half_i4_json_none          |    79000960 | 75 MB
+ test_mxkv_compress_half_i4_json_zstd          |     6448960 | 6298 kB
+ test_mxkv_compress_half_i4_jsonb_lz4          |    41752960 | 40 MB
+ test_mxkv_compress_half_i4_jsonb_none         |   104568960 | 100 MB
+ test_mxkv_compress_half_i4_jsonb_zstd         |    17112960 | 16 MB
+ test_mxkv_compress_half_i4_mxkv_float4_2_lz4  |      836960 | 817 kB
+ test_mxkv_compress_half_i4_mxkv_float4_2_none |    13684960 | 13 MB
+ test_mxkv_compress_half_i4_mxkv_float4_2_zstd |      468960 | 458 kB
+ test_mxkv_compress_half_i4_mxkv_float4_lz4    |    21680960 | 21 MB
+ test_mxkv_compress_half_i4_mxkv_float4_none   |    25960960 | 25 MB
+ test_mxkv_compress_half_i4_mxkv_float4_zstd   |    13720960 | 13 MB
+ test_mxkv_compress_half_i4_mxkv_float8_2_lz4  |      844960 | 825 kB
+ test_mxkv_compress_half_i4_mxkv_float8_2_none |    16420960 | 16 MB
+ test_mxkv_compress_half_i4_mxkv_float8_2_zstd |      480960 | 470 kB
+ test_mxkv_compress_half_i4_mxkv_float8_lz4    |    21248960 | 20 MB
+ test_mxkv_compress_half_i4_mxkv_float8_none   |    45976960 | 44 MB
+ test_mxkv_compress_half_i4_mxkv_float8_zstd   |     8376960 | 8181 kB
+ test_mxkv_compress_half_i4_mxkv_int4_lz4      |      836960 | 817 kB
+ test_mxkv_compress_half_i4_mxkv_int4_none     |    11180960 | 11 MB
+ test_mxkv_compress_half_i4_mxkv_int4_zstd     |      448960 | 438 kB
+ test_mxkv_compress_half_i4_mxkv_text_lz4      |    21544960 | 21 MB
+ test_mxkv_compress_half_i4_mxkv_text_none     |    35424960 | 34 MB
+ test_mxkv_compress_half_i4_mxkv_text_zstd     |    13816960 | 13 MB
+(24 rows)
+
+-- end_ignore
+-- vi: et :

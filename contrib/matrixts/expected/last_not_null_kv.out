@@ -1,0 +1,644 @@
+--
+-- verify the last_not_null_kv agg.
+--
+\set tname test_last_not_null_kv_t1
+-- start_ignore
+drop table if exists :tname;
+-- end_ignore
+create table :tname (batch int, ts int, value jsonb, part int default 0)
+ partition by range(part) (start(0) end(2) every(1))
+ distributed by (batch);
+-- single-phase agg, parallel disabled
+set enable_parallel_mode to off;
+set gp_enable_multiphase_agg to off;
+set enable_partitionwise_aggregate to off;
+\i sql/last_not_null_kv.template
+--
+-- last_not_null_kv() returns null on empty relation
+--
+truncate :tname;
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+(0 rows)
+
+--
+-- load data
+--
+-- a row is ignored when either value or time is null, and last_not_null_kv()
+-- returns null if a group contains only such kind of rows.
+\set batch 10
+insert into :tname values
+  (:batch, null, null)
+, (:batch, 100, null)
+, (:batch, null, '{"a": 10, "b": 20}')
+-- last_not_null_kv() returns null if all the values are null
+\set batch 11
+, (:batch, null, '{"a": 10, "b": 20}')
+, (:batch, null, '{"a": 11, "b": 21}')
+, (:batch, null, '{"a": 12, "b": 22}')
+-- last_not_null_kv() returns null if all the time are null
+\set batch 12
+, (:batch, 100, null)
+, (:batch, 200, null)
+, (:batch, 300, null)
+-- last_not_null_kv() returns non-null when the group contains at least one row
+-- whose value and time are both non-null.
+\set batch 20
+, (:batch, null, null)
+, (:batch, 100, null)
+, (:batch, null, '{"a": 10, "b": 20}')
+, (:batch, 300, '{"a": 11, "b": 21}')
+-- last_not_null_kv() does not rely on data order
+\set batch 30
+, (:batch, 300, '{"a": 11, "b": null, "e": 51}')
+, (:batch, 200, '{"a": null, "b": 20, "c": null, "d": 40}')
+, (:batch, 400, '{"a": null, "b": 22}')
+-- end of insert
+;
+explain (costs off)
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   Merge Key: test_last_not_null_kv_t1_1_prt_1.batch
+   ->  Sort
+         Sort Key: test_last_not_null_kv_t1_1_prt_1.batch
+         ->  HashAggregate
+               Group Key: test_last_not_null_kv_t1_1_prt_1.batch
+               ->  Append
+                     ->  Seq Scan on test_last_not_null_kv_t1_1_prt_1
+                     ->  Seq Scan on test_last_not_null_kv_t1_1_prt_2
+ Optimizer: Postgres query optimizer
+(10 rows)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+ batch |                             last_not_null_kv                             |        last_not_null_kv_value        
+-------+--------------------------------------------------------------------------+--------------------------------------
+    10 |                                                                          | 
+    11 |                                                                          | 
+    12 |                                                                          | 
+    20 | {"a": [11, "300"], "b": [21, "300"]}                                     | {"a": 11, "b": 21}
+    30 | {"a": [11, "300"], "b": [22, "400"], "d": [40, "200"], "e": [51, "300"]} | {"a": 11, "b": 22, "d": 40, "e": 51}
+(5 rows)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 10
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    10 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 11
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    11 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 12
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    12 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 20
+ group by batch
+ order by batch
+;
+ batch |           last_not_null_kv           | last_not_null_kv_value 
+-------+--------------------------------------+------------------------
+    20 | {"a": [11, "300"], "b": [21, "300"]} | {"a": 11, "b": 21}
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 30
+ group by batch
+ order by batch
+;
+ batch |                             last_not_null_kv                             |        last_not_null_kv_value        
+-------+--------------------------------------------------------------------------+--------------------------------------
+    30 | {"a": [11, "300"], "b": [22, "400"], "d": [40, "200"], "e": [51, "300"]} | {"a": 11, "b": 22, "d": 40, "e": 51}
+(1 row)
+
+-- multi-phase agg, parallel disabled
+set enable_parallel_mode to off;
+set gp_enable_multiphase_agg to on;
+set enable_partitionwise_aggregate to on;
+\i sql/last_not_null_kv.template
+--
+-- last_not_null_kv() returns null on empty relation
+--
+truncate :tname;
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+(0 rows)
+
+--
+-- load data
+--
+-- a row is ignored when either value or time is null, and last_not_null_kv()
+-- returns null if a group contains only such kind of rows.
+\set batch 10
+insert into :tname values
+  (:batch, null, null)
+, (:batch, 100, null)
+, (:batch, null, '{"a": 10, "b": 20}')
+-- last_not_null_kv() returns null if all the values are null
+\set batch 11
+, (:batch, null, '{"a": 10, "b": 20}')
+, (:batch, null, '{"a": 11, "b": 21}')
+, (:batch, null, '{"a": 12, "b": 22}')
+-- last_not_null_kv() returns null if all the time are null
+\set batch 12
+, (:batch, 100, null)
+, (:batch, 200, null)
+, (:batch, 300, null)
+-- last_not_null_kv() returns non-null when the group contains at least one row
+-- whose value and time are both non-null.
+\set batch 20
+, (:batch, null, null)
+, (:batch, 100, null)
+, (:batch, null, '{"a": 10, "b": 20}')
+, (:batch, 300, '{"a": 11, "b": 21}')
+-- last_not_null_kv() does not rely on data order
+\set batch 30
+, (:batch, 300, '{"a": 11, "b": null, "e": 51}')
+, (:batch, 200, '{"a": null, "b": 20, "c": null, "d": 40}')
+, (:batch, 400, '{"a": null, "b": 22}')
+-- end of insert
+;
+explain (costs off)
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   Merge Key: test_last_not_null_kv_t1_1_prt_1.batch
+   ->  Sort
+         Sort Key: test_last_not_null_kv_t1_1_prt_1.batch
+         ->  HashAggregate
+               Group Key: test_last_not_null_kv_t1_1_prt_1.batch
+               ->  Append
+                     ->  Seq Scan on test_last_not_null_kv_t1_1_prt_1
+                     ->  Seq Scan on test_last_not_null_kv_t1_1_prt_2
+ Optimizer: Postgres query optimizer
+(10 rows)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+ batch |                             last_not_null_kv                             |        last_not_null_kv_value        
+-------+--------------------------------------------------------------------------+--------------------------------------
+    10 |                                                                          | 
+    11 |                                                                          | 
+    12 |                                                                          | 
+    20 | {"a": [11, "300"], "b": [21, "300"]}                                     | {"a": 11, "b": 21}
+    30 | {"a": [11, "300"], "b": [22, "400"], "d": [40, "200"], "e": [51, "300"]} | {"a": 11, "b": 22, "d": 40, "e": 51}
+(5 rows)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 10
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    10 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 11
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    11 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 12
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    12 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 20
+ group by batch
+ order by batch
+;
+ batch |           last_not_null_kv           | last_not_null_kv_value 
+-------+--------------------------------------+------------------------
+    20 | {"a": [11, "300"], "b": [21, "300"]} | {"a": 11, "b": 21}
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 30
+ group by batch
+ order by batch
+;
+ batch |                             last_not_null_kv                             |        last_not_null_kv_value        
+-------+--------------------------------------------------------------------------+--------------------------------------
+    30 | {"a": [11, "300"], "b": [22, "400"], "d": [40, "200"], "e": [51, "300"]} | {"a": 11, "b": 22, "d": 40, "e": 51}
+(1 row)
+
+-- single-phase agg, parallel enabled
+set enable_parallel_mode to on;
+set gp_enable_multiphase_agg to off;
+set enable_partitionwise_aggregate to off;
+\i sql/last_not_null_kv.template
+--
+-- last_not_null_kv() returns null on empty relation
+--
+truncate :tname;
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+(0 rows)
+
+--
+-- load data
+--
+-- a row is ignored when either value or time is null, and last_not_null_kv()
+-- returns null if a group contains only such kind of rows.
+\set batch 10
+insert into :tname values
+  (:batch, null, null)
+, (:batch, 100, null)
+, (:batch, null, '{"a": 10, "b": 20}')
+-- last_not_null_kv() returns null if all the values are null
+\set batch 11
+, (:batch, null, '{"a": 10, "b": 20}')
+, (:batch, null, '{"a": 11, "b": 21}')
+, (:batch, null, '{"a": 12, "b": 22}')
+-- last_not_null_kv() returns null if all the time are null
+\set batch 12
+, (:batch, 100, null)
+, (:batch, 200, null)
+, (:batch, 300, null)
+-- last_not_null_kv() returns non-null when the group contains at least one row
+-- whose value and time are both non-null.
+\set batch 20
+, (:batch, null, null)
+, (:batch, 100, null)
+, (:batch, null, '{"a": 10, "b": 20}')
+, (:batch, 300, '{"a": 11, "b": 21}')
+-- last_not_null_kv() does not rely on data order
+\set batch 30
+, (:batch, 300, '{"a": 11, "b": null, "e": 51}')
+, (:batch, 200, '{"a": null, "b": 20, "c": null, "d": 40}')
+, (:batch, 400, '{"a": null, "b": 22}')
+-- end of insert
+;
+explain (costs off)
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Gather Motion 9:1  (slice1; segments: 9)
+   Merge Key: test_last_not_null_kv_t1_1_prt_1.batch
+   ->  Sort
+         Sort Key: test_last_not_null_kv_t1_1_prt_1.batch
+         ->  HashAggregate
+               Group Key: test_last_not_null_kv_t1_1_prt_1.batch
+               ->  Redistribute Motion 9:9  (slice2; segments: 9)
+                     Hash Key: test_last_not_null_kv_t1_1_prt_1.batch
+                     ->  Parallel Append
+                           ->  Parallel Seq Scan on test_last_not_null_kv_t1_1_prt_1
+                           ->  Parallel Seq Scan on test_last_not_null_kv_t1_1_prt_2
+ Optimizer: Postgres query optimizer
+(12 rows)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+ batch |                             last_not_null_kv                             |        last_not_null_kv_value        
+-------+--------------------------------------------------------------------------+--------------------------------------
+    10 |                                                                          | 
+    11 |                                                                          | 
+    12 |                                                                          | 
+    20 | {"a": [11, "300"], "b": [21, "300"]}                                     | {"a": 11, "b": 21}
+    30 | {"a": [11, "300"], "b": [22, "400"], "d": [40, "200"], "e": [51, "300"]} | {"a": 11, "b": 22, "d": 40, "e": 51}
+(5 rows)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 10
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    10 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 11
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    11 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 12
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    12 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 20
+ group by batch
+ order by batch
+;
+ batch |           last_not_null_kv           | last_not_null_kv_value 
+-------+--------------------------------------+------------------------
+    20 | {"a": [11, "300"], "b": [21, "300"]} | {"a": 11, "b": 21}
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 30
+ group by batch
+ order by batch
+;
+ batch |                             last_not_null_kv                             |        last_not_null_kv_value        
+-------+--------------------------------------------------------------------------+--------------------------------------
+    30 | {"a": [11, "300"], "b": [22, "400"], "d": [40, "200"], "e": [51, "300"]} | {"a": 11, "b": 22, "d": 40, "e": 51}
+(1 row)
+
+-- multi-phase agg, parallel enabled
+set enable_parallel_mode to on;
+set gp_enable_multiphase_agg to on;
+set enable_partitionwise_aggregate to on;
+\i sql/last_not_null_kv.template
+--
+-- last_not_null_kv() returns null on empty relation
+--
+truncate :tname;
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+(0 rows)
+
+--
+-- load data
+--
+-- a row is ignored when either value or time is null, and last_not_null_kv()
+-- returns null if a group contains only such kind of rows.
+\set batch 10
+insert into :tname values
+  (:batch, null, null)
+, (:batch, 100, null)
+, (:batch, null, '{"a": 10, "b": 20}')
+-- last_not_null_kv() returns null if all the values are null
+\set batch 11
+, (:batch, null, '{"a": 10, "b": 20}')
+, (:batch, null, '{"a": 11, "b": 21}')
+, (:batch, null, '{"a": 12, "b": 22}')
+-- last_not_null_kv() returns null if all the time are null
+\set batch 12
+, (:batch, 100, null)
+, (:batch, 200, null)
+, (:batch, 300, null)
+-- last_not_null_kv() returns non-null when the group contains at least one row
+-- whose value and time are both non-null.
+\set batch 20
+, (:batch, null, null)
+, (:batch, 100, null)
+, (:batch, null, '{"a": 10, "b": 20}')
+, (:batch, 300, '{"a": 11, "b": 21}')
+-- last_not_null_kv() does not rely on data order
+\set batch 30
+, (:batch, 300, '{"a": 11, "b": null, "e": 51}')
+, (:batch, 200, '{"a": null, "b": 20, "c": null, "d": 40}')
+, (:batch, 400, '{"a": null, "b": 22}')
+-- end of insert
+;
+explain (costs off)
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
+ Gather Motion 9:1  (slice1; segments: 9)
+   Merge Key: test_last_not_null_kv_t1_1_prt_1.batch
+   ->  Sort
+         Sort Key: test_last_not_null_kv_t1_1_prt_1.batch
+         ->  Finalize HashAggregate
+               Group Key: test_last_not_null_kv_t1_1_prt_1.batch
+               ->  Redistribute Motion 9:9  (slice2; segments: 9)
+                     Hash Key: test_last_not_null_kv_t1_1_prt_1.batch
+                     ->  Partial HashAggregate
+                           Group Key: test_last_not_null_kv_t1_1_prt_1.batch
+                           ->  Parallel Append
+                                 ->  Parallel Seq Scan on test_last_not_null_kv_t1_1_prt_1
+                                 ->  Parallel Seq Scan on test_last_not_null_kv_t1_1_prt_2
+ Optimizer: Postgres query optimizer
+(14 rows)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+ batch |                             last_not_null_kv                             |        last_not_null_kv_value        
+-------+--------------------------------------------------------------------------+--------------------------------------
+    10 |                                                                          | 
+    11 |                                                                          | 
+    12 |                                                                          | 
+    20 | {"a": [11, "300"], "b": [21, "300"]}                                     | {"a": 11, "b": 21}
+    30 | {"a": [11, "300"], "b": [22, "400"], "d": [40, "200"], "e": [51, "300"]} | {"a": 11, "b": 22, "d": 40, "e": 51}
+(5 rows)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 10
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    10 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 11
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    11 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 12
+ group by batch
+ order by batch
+;
+ batch | last_not_null_kv | last_not_null_kv_value 
+-------+------------------+------------------------
+    12 |                  | 
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 20
+ group by batch
+ order by batch
+;
+ batch |           last_not_null_kv           | last_not_null_kv_value 
+-------+--------------------------------------+------------------------
+    20 | {"a": [11, "300"], "b": [21, "300"]} | {"a": 11, "b": 21}
+(1 row)
+
+select batch
+     , last_not_null_kv(value, ts)
+     , last_not_null_kv_value(value, ts)
+  from :tname
+ where batch = 30
+ group by batch
+ order by batch
+;
+ batch |                             last_not_null_kv                             |        last_not_null_kv_value        
+-------+--------------------------------------------------------------------------+--------------------------------------
+    30 | {"a": [11, "300"], "b": [22, "400"], "d": [40, "200"], "e": [51, "300"]} | {"a": 11, "b": 22, "d": 40, "e": 51}
+(1 row)
+

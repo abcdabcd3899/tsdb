@@ -1,0 +1,6 @@
+# matrixmgr extension
+comment = 'matrixdb monitor and management extension'
+default_version = '3.1'
+module_pathname = '$libdir/matrixmgr'
+relocatable = true
+requires = 'matrixts'

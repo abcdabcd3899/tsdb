@@ -1,0 +1,1 @@
+src/backend/utils/resgroup/resgroup.o src/backend/utils/resgroup/resgroup_helper.o src/backend/utils/resgroup/resgroup-ops-linux.o

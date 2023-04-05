@@ -1,0 +1,400 @@
+-- start_ignore
+CREATE EXTENSION matrixts;
+ERROR:  extension "matrixts" already exists
+SET enable_mergejoin TO off;
+SET enable_nestloop TO off;
+SET enable_parallel_mode TO off;
+SET gp_enable_multiphase_agg TO off;
+SET optimizer TO off;
+CREATE SCHEMA IF NOT EXISTS apm_test;
+NOTICE:  schema "apm_test" already exists, skipping
+SET matrix.ts_guc_apm_allow_dml TO ON;
+TRUNCATE matrixts_internal.apm_operation_log;
+TRUNCATE matrixts_internal.apm_rel_policy;
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+SET matrix.ts_guc_apm_allow_dml TO OFF;
+-- end_ignore
+------------------------------------
+----          set_policy        ----
+------------------------------------
+-- should error invalid regclass;
+SELECT public.set_policy('no_such_table'::regclass, 'abc');
+ERROR:  relation "no_such_table" does not exist
+LINE 1: SELECT public.set_policy('no_such_table'::regclass, 'abc');
+                                 ^
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.set_tab;
+NOTICE:  table "set_tab" does not exist, skipping
+CREATE TABLE apm_test.set_tab(id int);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'id' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+-- end_ignore
+-- should error when rel is NULL
+SELECT public.set_policy(NULL, 'abc');
+ERROR:  argument "rel" must not be NULL.
+CONTEXT:  PL/pgSQL function set_policy(regclass,text) line 11 at RAISE
+-- should error when policy_name is NULL or empty
+SELECT public.set_policy('apm_test.set_tab'::regclass, NULL);
+ERROR:  argument "policy_name" must not be NULL or empty.
+CONTEXT:  PL/pgSQL function set_policy(regclass,text) line 14 at RAISE
+SELECT public.set_policy('apm_test.set_tab'::regclass, '');
+ERROR:  argument "policy_name" must not be NULL or empty.
+CONTEXT:  PL/pgSQL function set_policy(regclass,text) line 14 at RAISE
+-- should error "Only partitioned table can set_policy"
+SELECT public.set_policy('apm_test.set_tab'::regclass, 'abc');
+ERROR:  Only partitioned table can set_policy.
+CONTEXT:  PL/pgSQL function set_policy(regclass,text) line 25 at RAISE
+-- start_ignore
+DROP TABLE IF EXISTS apm_test."_Fo0_!";
+NOTICE:  table "_Fo0_!" does not exist, skipping
+CREATE TABLE apm_test."_Fo0_!" (trans_id int, date date, amount
+decimal(9,2), region text)
+DISTRIBUTED BY (trans_id)
+PARTITION BY RANGE (date)
+SUBPARTITION BY LIST (region)
+SUBPARTITION TEMPLATE
+( SUBPARTITION usa VALUES ('usa'),
+  SUBPARTITION china VALUES ('china'),
+  DEFAULT SUBPARTITION other_regions)
+  (START (date '2011-01-01') INCLUSIVE
+   END (date '2012-01-01') EXCLUSIVE
+   EVERY (INTERVAL '6 month'),
+   DEFAULT PARTITION outlying_dates);
+-- end_ignore
+-- should error "Cannot set_policy to a partition child table"
+SELECT public.set_policy('apm_test."_Fo0_!_1_prt_2"'::regclass, 'abc');
+ERROR:  Cannot set_policy to a partition child table.
+CONTEXT:  PL/pgSQL function set_policy(regclass,text) line 22 at RAISE
+SELECT public.set_policy('apm_test."_Fo0_!_1_prt_2_2_prt_china"'::regclass, 'abc');
+ERROR:  Cannot set_policy to a partition child table.
+CONTEXT:  PL/pgSQL function set_policy(regclass,text) line 22 at RAISE
+-- should error "No such policy "ab'c"
+SELECT public.set_policy('apm_test."_Fo0_!"'::regclass, 'ab''c');
+ERROR:  No such policy "ab'c"
+CONTEXT:  PL/pgSQL function set_policy(regclass,text) line 32 at RAISE
+-- should success
+SELECT public.set_policy('apm_test."_Fo0_!"'::regclass, 'auto_partitioning');
+ set_policy 
+------------
+ 
+(1 row)
+
+-- should add 1 line to apm_rel_policy
+SELECT reloid::regclass, class_id, list_func, list_args, version FROM matrixts_internal.apm_rel_policy;
+      reloid       | class_id | list_func | list_args | version 
+-------------------+----------+-----------+-----------+---------
+ apm_test."_Fo0_!" |        2 |           |           | 
+(1 row)
+
+-- should be empty in apm_rel_policy_action
+SELECT reloid::regclass, class_id, action, disabled, check_func, check_args, act_func, act_args, term_func, term_args, version FROM matrixts_internal.apm_rel_policy_action;
+ reloid | class_id | action | disabled | check_func | check_args | act_func | act_args | term_func | term_args | version 
+--------+----------+--------+----------+------------+------------+----------+----------+-----------+-----------+---------
+(0 rows)
+
+-- should add 1 line in apm_operation_log
+SELECT reloid::regclass, relname, operation, class_id FROM matrixts_internal.apm_operation_log ORDER BY ts;
+      reloid       |      relname      | operation | class_id 
+-------------------+-------------------+-----------+----------
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | register  |        2
+(1 row)
+
+-- should error "already has the policy"
+SELECT public.set_policy('apm_test."_Fo0_!"'::regclass, 'auto_partitioning');
+WARNING:  Table "apm_test."_Fo0_!"" already has the policy "auto_partitioning", skipping...
+ set_policy 
+------------
+ 
+(1 row)
+
+-- should still 1 line in apm_operation_log
+SELECT reloid::regclass, relname, operation, class_id FROM matrixts_internal.apm_operation_log ORDER BY ts;
+      reloid       |      relname      | operation | class_id 
+-------------------+-------------------+-----------+----------
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | register  |        2
+(1 row)
+
+-- should success
+SELECT public.drop_policy('apm_test."_Fo0_!"'::regclass);
+ drop_policy 
+-------------
+ 
+(1 row)
+
+-- should be empty in apm_rel_policy
+SELECT reloid::regclass, class_id, list_func, list_args, version FROM matrixts_internal.apm_rel_policy;
+ reloid | class_id | list_func | list_args | version 
+--------+----------+-----------+-----------+---------
+(0 rows)
+
+-- should be empty in apm_rel_policy_action
+SELECT reloid::regclass, class_id, action, disabled, check_func, check_args, act_func, act_args, term_func, term_args, version FROM matrixts_internal.apm_rel_policy_action;
+ reloid | class_id | action | disabled | check_func | check_args | act_func | act_args | term_func | term_args | version 
+--------+----------+--------+----------+------------+------------+----------+----------+-----------+-----------+---------
+(0 rows)
+
+-- should be 2 lines in apm_operation_log
+SELECT reloid::regclass, relname, operation, class_id FROM matrixts_internal.apm_operation_log ORDER BY ts;
+      reloid       |      relname      | operation  | class_id 
+-------------------+-------------------+------------+----------
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | register   |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | unregister |        2
+(2 rows)
+
+-- start_ignore
+TRUNCATE matrixts_internal.apm_operation_log;
+-- end_ignore
+---- assign two policy to a table is not allowed in this version ----
+-- should success
+SELECT public.set_policy('apm_test."_Fo0_!"'::regclass, 'auto_splitting');
+ set_policy 
+------------
+ 
+(1 row)
+
+-- should fail because 1 policy per table
+SELECT public.set_policy('apm_test."_Fo0_!"'::regclass, 'auto_partitioning');
+ERROR:  Table "apm_test."_Fo0_!"" already has a policy class "auto_splitting"
+HINT:  Only 1 policy per table allowed on this version. Run "SELECT drop_policy('apm_test."_Fo0_!"'::regclass)" to remove current policy.
+CONTEXT:  PL/pgSQL function set_policy(regclass,text) line 45 at RAISE
+-- should success update table action setting
+SELECT public.set_policy_action('apm_test."_Fo0_!"'::regclass, 'retention', '6 month');
+ set_policy_action 
+-------------------
+ 
+(1 row)
+
+SELECT public.set_policy_action('apm_test."_Fo0_!"'::regclass, 'auto_split', '{ "age": "20 days", "period": "15 day" }');
+ set_policy_action 
+-------------------
+ 
+(1 row)
+
+-- should warn rel has no such policy
+SELECT public.drop_policy('apm_test."_Fo0_!"'::regclass, 'auto_partitioning');
+ERROR:  Table "apm_test."_Fo0_!"" does not have policy "auto_partitioning", skipping...
+CONTEXT:  PL/pgSQL function drop_policy(regclass,text) line 23 at RAISE
+-- should have 1 line of operation log
+SELECT reloid::regclass, relname, operation, class_id, class_name FROM matrixts_internal.apm_operation_log ORDER BY ts;
+      reloid       |      relname      | operation | class_id |   class_name   
+-------------------+-------------------+-----------+----------+----------------
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | register  |        1 | auto_splitting
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | add       |        1 | auto_splitting
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | add       |        1 | auto_splitting
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | add       |        1 | auto_splitting
+(4 rows)
+
+-- should drop successfully
+SELECT public.drop_policy('apm_test."_Fo0_!"'::regclass, 'auto_splitting');
+ drop_policy 
+-------------
+ 
+(1 row)
+
+-- should have 2 lines of operation log
+SELECT reloid::regclass, relname, operation, class_id, class_name FROM matrixts_internal.apm_operation_log ORDER BY ts;
+      reloid       |      relname      | operation  | class_id |   class_name   
+-------------------+-------------------+------------+----------+----------------
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | register   |        1 | auto_splitting
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | add        |        1 | auto_splitting
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | add        |        1 | auto_splitting
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | add        |        1 | auto_splitting
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | drop       |        1 | auto_splitting
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | drop       |        1 | auto_splitting
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | unregister |        1 | auto_splitting
+(7 rows)
+
+-- the GUC should be still off
+SHOW matrix.ts_guc_apm_allow_dml;
+ matrix.ts_guc_apm_allow_dml 
+-----------------------------
+ off
+(1 row)
+
+------------------------------------
+----      set_policy_action     ----
+------------------------------------
+-- start_ignore
+SET matrix.ts_guc_apm_allow_dml TO ON;
+TRUNCATE matrixts_internal.apm_operation_log;
+TRUNCATE matrixts_internal.apm_rel_policy;
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+SET matrix.ts_guc_apm_allow_dml TO OFF;
+-- end_ignore
+-- should error when rel is NULL
+SELECT set_policy(NULL, 'auto_partitioning');
+ERROR:  argument "rel" must not be NULL.
+CONTEXT:  PL/pgSQL function set_policy(regclass,text) line 11 at RAISE
+-- should error when action_name is NULL or empty
+SELECT set_policy_action('apm_test."_Fo0_!"'::regclass, NULL, '');
+ERROR:  argument "action_name" must not be NULL or empty.
+CONTEXT:  PL/pgSQL function set_policy_action(regclass,text,text) line 11 at RAISE
+SELECT set_policy_action('apm_test."_Fo0_!"'::regclass, '', '');
+ERROR:  argument "action_name" must not be NULL or empty.
+CONTEXT:  PL/pgSQL function set_policy_action(regclass,text,text) line 11 at RAISE
+-- should error when table don't have a policy
+SELECT set_policy_action('apm_test."_Fo0_!"'::regclass, 'retention', '2 year');
+ERROR:  Table "apm_test."_Fo0_!"" does not have a policy
+CONTEXT:  PL/pgSQL function set_policy_action(regclass,text,text) line 20 at RAISE
+-- should success bind policy to table
+SELECT set_policy('apm_test."_Fo0_!"'::regclass, 'auto_partitioning');
+ set_policy 
+------------
+ 
+(1 row)
+
+-- should be empty in apm_rel_policy_action
+SELECT reloid::regclass, class_id, action, disabled, check_func, check_args, act_func, act_args, term_func, term_args, version FROM matrixts_internal.apm_rel_policy_action;
+ reloid | class_id | action | disabled | check_func | check_args | act_func | act_args | term_func | term_args | version 
+--------+----------+--------+----------+------------+------------+----------+----------+-----------+-----------+---------
+(0 rows)
+
+-- should success set action args
+SELECT set_policy_action('apm_test."_Fo0_!"'::regclass, 'retention', '2 year');
+ set_policy_action 
+-------------------
+ 
+(1 row)
+
+-- should have 1 row in apm_rel_policy_action
+SELECT reloid::regclass, class_id, action, disabled, check_func, check_args, act_func, act_args, term_func, term_args, version FROM matrixts_internal.apm_rel_policy_action;
+      reloid       | class_id |  action   | disabled | check_func |     check_args      | act_func | act_args | term_func | term_args | version 
+-------------------+----------+-----------+----------+------------+---------------------+----------+----------+-----------+-----------+---------
+ apm_test."_Fo0_!" |        2 | retention |          |            | {"after": "2 year"} |          |          |           |           | 
+(1 row)
+
+-- should be 2 lines in apm_operation_log
+SELECT reloid::regclass, relname, operation, class_id FROM matrixts_internal.apm_operation_log ORDER BY ts;
+      reloid       |      relname      | operation | class_id 
+-------------------+-------------------+-----------+----------
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | register  |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | add       |        2
+(2 rows)
+
+-- the GUC should be still off
+SHOW matrix.ts_guc_apm_allow_dml;
+ matrix.ts_guc_apm_allow_dml 
+-----------------------------
+ off
+(1 row)
+
+----------------------------------------
+----      disable_policy_action     ----
+----      enable_policy_action      ----
+----------------------------------------
+SELECT enable_policy_action('apm_test."_Fo0_!"'::regclass, 'retention');
+ enable_policy_action 
+----------------------
+ 
+(1 row)
+
+-- should be false in disabled column in apm_rel_policy_action
+SELECT reloid::regclass, class_id, action, disabled, check_func, check_args, act_func, act_args, term_func, term_args, version FROM matrixts_internal.apm_rel_policy_action;
+      reloid       | class_id |  action   | disabled | check_func |     check_args      | act_func | act_args | term_func | term_args | version 
+-------------------+----------+-----------+----------+------------+---------------------+----------+----------+-----------+-----------+---------
+ apm_test."_Fo0_!" |        2 | retention | f        |            | {"after": "2 year"} |          |          |           |           | 
+(1 row)
+
+-- should be 3 lines in apm_operation_log
+SELECT reloid::regclass, relname, operation, class_id FROM matrixts_internal.apm_operation_log ORDER BY ts;
+      reloid       |      relname      | operation | class_id 
+-------------------+-------------------+-----------+----------
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | register  |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | add       |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | enabled   |        2
+(3 rows)
+
+SELECT disable_policy_action('apm_test."_Fo0_!"'::regclass, 'retention');
+ disable_policy_action 
+-----------------------
+ 
+(1 row)
+
+-- should be true in disabled column in apm_rel_policy_action
+SELECT reloid::regclass, class_id, action, disabled, check_func, check_args, act_func, act_args, term_func, term_args, version FROM matrixts_internal.apm_rel_policy_action;
+      reloid       | class_id |  action   | disabled | check_func |     check_args      | act_func | act_args | term_func | term_args | version 
+-------------------+----------+-----------+----------+------------+---------------------+----------+----------+-----------+-----------+---------
+ apm_test."_Fo0_!" |        2 | retention | t        |            | {"after": "2 year"} |          |          |           |           | 
+(1 row)
+
+-- should be 4 lines in apm_operation_log
+SELECT reloid::regclass, relname, operation, class_id FROM matrixts_internal.apm_operation_log ORDER BY ts;
+      reloid       |      relname      | operation | class_id 
+-------------------+-------------------+-----------+----------
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | register  |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | add       |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | enabled   |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | disabled  |        2
+(4 rows)
+
+SELECT disable_policy_action('apm_test."_Fo0_!"'::regclass, 'auto_create');
+ disable_policy_action 
+-----------------------
+ 
+(1 row)
+
+-- should be true in disabled column in apm_rel_policy_action
+SELECT reloid::regclass, class_id, action, disabled, check_func, check_args, act_func, act_args, term_func, term_args, version FROM matrixts_internal.apm_rel_policy_action;
+      reloid       | class_id |   action    | disabled | check_func |     check_args      | act_func | act_args | term_func | term_args | version 
+-------------------+----------+-------------+----------+------------+---------------------+----------+----------+-----------+-----------+---------
+ apm_test."_Fo0_!" |        2 | retention   | t        |            | {"after": "2 year"} |          |          |           |           | 
+ apm_test."_Fo0_!" |        2 | auto_create | t        |            |                     |          |          |           |           | 
+(2 rows)
+
+-- should be 5 lines in apm_operation_log
+SELECT reloid::regclass, relname, operation, class_id FROM matrixts_internal.apm_operation_log ORDER BY ts;
+      reloid       |      relname      | operation | class_id 
+-------------------+-------------------+-----------+----------
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | register  |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | add       |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | enabled   |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | disabled  |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | disabled  |        2
+(5 rows)
+
+SELECT enable_policy_action('apm_test."_Fo0_!"'::regclass, 'auto_create');
+ enable_policy_action 
+----------------------
+ 
+(1 row)
+
+-- should be false in disabled column in apm_rel_policy_action
+SELECT reloid::regclass, class_id, action, disabled, check_func, check_args, act_func, act_args, term_func, term_args, version FROM matrixts_internal.apm_rel_policy_action;
+      reloid       | class_id |   action    | disabled | check_func |     check_args      | act_func | act_args | term_func | term_args | version 
+-------------------+----------+-------------+----------+------------+---------------------+----------+----------+-----------+-----------+---------
+ apm_test."_Fo0_!" |        2 | retention   | t        |            | {"after": "2 year"} |          |          |           |           | 
+ apm_test."_Fo0_!" |        2 | auto_create | f        |            |                     |          |          |           |           | 
+(2 rows)
+
+-- should be 6 lines in apm_operation_log
+SELECT reloid::regclass, relname, operation, class_id FROM matrixts_internal.apm_operation_log ORDER BY ts;
+      reloid       |      relname      | operation | class_id 
+-------------------+-------------------+-----------+----------
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | register  |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | add       |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | enabled   |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | disabled  |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | disabled  |        2
+ apm_test."_Fo0_!" | apm_test."_Fo0_!" | enabled   |        2
+(6 rows)
+
+-- should return effective apm settings
+SELECT relname, class_name, action, disabled, check_func, check_args, act_func, act_args, version FROM apm_settings;
+      relname      |    class_name     |   action    | disabled |               check_func               |      check_args      |                    act_func                    |       act_args        | version 
+-------------------+-------------------+-------------+----------+----------------------------------------+----------------------+------------------------------------------------+-----------------------+---------
+ apm_test."_Fo0_!" | auto_partitioning | retention   | t        | matrixts_internal.apm_generic_expired  | {"after": "2 year"}  | matrixts_internal.apm_generic_drop_partition   | {}                    | 1.0
+ apm_test."_Fo0_!" | auto_partitioning | auto_create | f        | matrixts_internal.apm_generic_incoming | {"before": "3 days"} | matrixts_internal.apm_generic_append_partition | {"period": "8 hours"} | 1.0
+(2 rows)
+
+SELECT relname, class_name, action, disabled, check_func, check_args, act_func, act_args, version FROM list_policy('apm_test."_Fo0_!"');
+      relname      |    class_name     |   action    | disabled |               check_func               |      check_args      |                    act_func                    |       act_args        | version 
+-------------------+-------------------+-------------+----------+----------------------------------------+----------------------+------------------------------------------------+-----------------------+---------
+ apm_test."_Fo0_!" | auto_partitioning | auto_create | f        | matrixts_internal.apm_generic_incoming | {"before": "3 days"} | matrixts_internal.apm_generic_append_partition | {"period": "8 hours"} | 1.0
+ apm_test."_Fo0_!" | auto_partitioning | retention   | t        | matrixts_internal.apm_generic_expired  | {"after": "2 year"}  | matrixts_internal.apm_generic_drop_partition   | {}                    | 1.0
+(2 rows)
+
+-- should error for non-exist table
+SELECT relname, class_name, action, disabled, check_func, check_args, act_func, act_args, version FROM list_policy('aaaXXXX');
+ERROR:  relation "aaaxxxx" does not exist
+LINE 1: ...rgs, act_func, act_args, version FROM list_policy('aaaXXXX')...
+                                                             ^

@@ -1,0 +1,472 @@
+-- start_matchsubs
+-- m/[0-9]+_internal_storage_internal_column/
+-- s/[0-9]+_internal_storage_internal_column/###internal_storage_internal_column/
+-- m/[0-9]+_internal_storage/
+-- s/[0-9]+_internal_storage/###_internal_storage /
+-- end_matchsubs
+-- start_ignore
+create extension if not exists matrixts;
+-- end_ignore
+
+-- 1. coninuous view sanity check
+create table con_view_test_t1(c1 int, c2 int, c3 timestamp);
+create table con_view_test_t2(c1 text, c2 int, c3 timestamp);
+-- 1.1 positive checks
+-- 1.1.1 support agg 
+begin;
+create view con_view with (continuous)
+as select count(*), c1 from con_view_test_t1 group by c1;
+select count(*) from matrixts_internal.continuous_views;
+abort;
+-- 1.1.2 support filter
+begin;
+create view con_view with (continuous)
+as select count(*), c1 from con_view_test_t1 where c2 < 100
+group by c1;
+select count(*) from matrixts_internal.continuous_views;
+abort;
+-- 1.1.3 support plain agg 
+begin;
+create view con_view with (continuous)
+as select count(*) from con_view_test_t1;
+select count(*) from matrixts_internal.continuous_views;
+abort;
+-- 1.1.4 support multiple agg 
+begin;
+create view con_view with (continuous)
+as select count(*), min(c1), c1, c2 from con_view_test_t1 group by c1, c2;
+select count(*) from matrixts_internal.continuous_views;
+abort; -- 1.1.5 support filter 
+begin;
+create view con_view with (continuous)
+as select count(*), c1, c2 from con_view_test_t1 where c2 > 10 group by c1, c2;
+select count(*) from matrixts_internal.continuous_views;
+abort;
+-- 1.1.6 support expression as group key
+begin;
+create view con_view with (continuous)
+as select count(*), time_bucket('1 hour', c3) as hour
+from con_view_test_t1
+group by hour;
+select count(*) from matrixts_internal.continuous_views;
+abort;
+-- 1.1.8 support expression with aggregate funcs
+begin;
+create view con_view with (continuous)
+as select count(*) + 1 as f1, c1 + 1 as f2, c1 as f3
+from con_view_test_t1 group by c1;
+select count(*) from matrixts_internal.continuous_views;
+abort;
+-- 1.1.9 support continuous=false
+begin;
+create view con_view with (continuous=false)
+as select count(*), c1, c2 from con_view_test_t1 group by c1, c2;
+select count(*) from matrixts_internal.continuous_views;
+abort;
+-- 1.1.10 support continuous=true
+begin;
+create view con_view with (continuous=true)
+as select count(*), c1, c2 from con_view_test_t1 group by c1, c2;
+select count(*) from matrixts_internal.continuous_views;
+abort;
+
+-- 1.2 negative checks
+-- 1.2.1 disallow distributed key
+begin;
+create view con_view with (continuous)
+as select count(*), c1 from con_view_test_t1 group by c1
+distributed by (c1);
+abort;
+-- 1.2.2 disallow cte 
+begin;
+create view con_view with(continuous)
+as
+with w1 as (select count(*) from con_view_test_t1) select * from w1;
+abort;
+-- 1.2.3 disallow windown function
+begin;
+create view con_view with(continuous)
+as select count(*) over (partition by c1) from con_view_test_t1;
+abort;
+-- 1.2.4 disallow join
+begin;
+create view con_view with(continuous)
+as
+select count(*) from con_view_test_t1,con_view_test_t2 
+where con_view_test_t1.c2=con_view_test_t2.c2;
+abort;
+-- 1.2.5 disallow subquery 
+begin;
+create view con_view with(continuous)
+as select count(*) 
+from (select count(*) from con_view_test_t1) as t1;
+abort;
+-- 1.2.6 disallow sublink
+begin;
+create view con_view with(continuous)
+as select count(*), c1 from con_view_test_t1
+where c2 in (select c2 from con_view_test_t1 where c2=1)
+group by c1; 
+abort;
+-- 1.2.7 disallow limit 
+begin;
+create view con_view with(continuous)
+as select count(*), c1 from con_view_test_t1 group by c1 limit 1;
+abort;
+-- 1.2.8 disallow groupingsets 
+begin;
+create view con_view with(continuous)
+as select count(*), c1, c2 from con_view_test_t1 
+group by grouping sets ((c1), (c2));
+abort;
+-- 1.2.9 disallow having 
+begin;
+create view con_view with(continuous)
+as select count(*), c1 from con_view_test_t1 group by c1 having c1=1;
+abort;
+-- 1.2.10 must be agg or sort
+begin;
+create view con_view with(continuous)
+as select c1 from con_view_test_t1;
+abort;
+-- 1.2.11 disallow order by
+begin;
+create view con_view with(continuous)
+as select c1 from con_view_test_t1 order by c1;
+abort;
+-- 1.2.12 group key must be specified within targetlist 
+begin;
+create view con_view with(continuous)
+as select count(*) from con_view_test_t1 group by c1;
+abort;
+
+-- 1.2.13 aggregate must has combinefn
+begin;
+create view con_view with (continuous)
+as select array_agg(c2), c1 
+from con_view_test_t1 group by c1;
+abort;
+
+-- 2. coninuous view result correctness check
+-- 2.1 plain agg
+set sortheap_sort_mem to '64kB';
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage), min(cpu_usage)
+from con_view_result;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view;
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage), min(cpu_usage)
+from con_view_result;
+select avg, max from con_view;
+select avg + 1, max + 1 from con_view;
+select * from con_view where avg > 50;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_incr.data';
+select * from con_view;
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage), min(cpu_usage)
+from con_view_result;
+select avg, max from con_view;
+select avg + 1, max + 1 from con_view;
+select * from con_view where avg > 50;
+drop view con_view cascade;
+drop table con_view_result;
+
+-- 2.2 group by tag_id
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view order by tag_id;
+select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+	   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id order by tag_id;
+select avg, max from con_view order by tag_id;
+select avg + 1, max + 1 from con_view order by tag_id;
+select * from con_view where avg > 50 order by tag_id;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_incr.data';
+select * from con_view order by tag_id;
+select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+	   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id order by tag_id;
+select con_view_result.* from con_view, con_view_result
+where con_view.tag_id = con_view_result.tag_id
+and con_view.last_cpu = con_view_result.cpu_usage
+and con_view.last_ts = con_view_result.ts
+order by con_view_result.tag_id; 
+select avg, max from con_view order by tag_id;
+select avg + 1, max + 1 from con_view order by tag_id;
+select * from con_view where avg > 50 order by tag_id;
+drop view con_view cascade;
+drop table con_view_result;
+
+-- 2.3 group by time_bucket
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month from con_view_result group by month;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view order by month;
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month from con_view_result group by month
+order by month;
+select avg, max from con_view order by month;
+select avg + 1, max + 1 from con_view order by month;
+select * from con_view where avg > 50 order by month;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_incr.data';
+select * from con_view order by month;
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month from con_view_result group by month
+order by month;
+select avg, max from con_view order by month;
+select avg + 1, max + 1 from con_view order by month;
+select * from con_view where avg > 50 order by month;
+drop view con_view cascade;
+drop table con_view_result;
+
+-- 2.4 group by time_bucket, tag_id
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month, tag_id from con_view_result
+group by month, tag_id;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view order by month, tag_id;
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month, tag_id from con_view_result
+group by month, tag_id order by month, tag_id;
+select avg, max from con_view order by month, tag_id;
+select avg + 1, max + 1 from con_view order by month, tag_id;
+select * from con_view where avg > 50 order by month, tag_id;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_incr.data';
+select * from con_view order by month, tag_id;
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month, tag_id from con_view_result
+group by month, tag_id order by month, tag_id;
+select avg, max from con_view order by month, tag_id;
+select avg + 1, max + 1 from con_view order by month, tag_id;
+select * from con_view where avg > 50 order by month, tag_id;
+drop view con_view cascade;
+drop table con_view_result;
+
+-- 2.5 filter  
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous) as
+select count(*), tag_id from con_view_result where tag_id < 3 group by tag_id;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_incr.data';
+select * from con_view;
+drop view con_view cascade;
+drop table con_view_result;
+
+-- 3. coninuous view drop behavior check
+create table con_view_drop_t1(c1 int);
+create view con_view_drop with (continuous) as select count(*) from con_view_drop_t1;
+
+-- 3.1 drop error
+drop table con_view_drop_t1;
+
+-- 3.2 drop cascade success
+drop table con_view_drop_t1 cascade;
+
+-- 3.3 drop success
+create table con_view_drop_t1(c1 int);
+create view con_view_drop with (continuous) as select count(*) from con_view_drop_t1;
+drop view con_view_drop cascade;
+drop table con_view_drop_t1;
+
+-- 4. coninuous view populate behavior check
+create table con_view_pop_t1(c1 int);
+insert into con_view_pop_t1 select i % 10 from generate_series(1, 100) i;
+
+-- 4.1 create a continuous view default
+begin;
+create view con_view_pop with (continuous)
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+abort;
+
+-- 4.2 create a continous view with explicit "populate"
+
+-- 4.2.1 create a continous view with explicit "populate"
+begin;
+create view con_view_pop with (continuous, populate)
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+abort;
+
+-- 4.2.2 create a continous view with explicit "populate=1"
+begin;
+create view con_view_pop with (continuous, populate=1)
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+abort;
+
+-- 4.2.3 create a continous view with explicit "populate=\"true\""
+begin;
+create view con_view_pop with (continuous, populate="true")
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+abort;
+
+-- 4.2.4 create a continous view with explicit "populate=\"on\""
+begin;
+create view con_view_pop with (continuous, populate="on")
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+abort;
+
+-- 4.3 create a continous view with explicit no "populate"
+
+-- 4.3.1 create a continous view with explicit "populate=0"
+begin;
+create view con_view_pop with (continuous, populate=0)
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+abort;
+
+-- 4.3.2 create a continous view with explicit "populate=\"false\""
+begin;
+create view con_view_pop with (continuous, populate="false")
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+abort;
+
+-- 4.3.3 create a continous view with explicit "populate=\"off\""
+begin;
+create view con_view_pop with (continuous, populate="off")
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+abort;
+
+--
+-- 5. Transaction test
+--
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+begin;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+abort;
+-- expect no data
+select * from con_view order by tag_id;
+drop view con_view cascade;
+drop table con_view_result;
+
+--
+-- 6. Index test
+--
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select matrixts_internal.analyze_continuous_view('con_view');
+set enable_bitmapscan to off;
+select * from con_view where tag_id = 0;
+select * from con_view where tag_id = 0 or tag_id = 1;
+select * from con_view where tag_id in (0, 1);
+set enable_bitmapscan to on;
+select * from con_view where tag_id = 0;
+select * from con_view where tag_id = 0 or tag_id = 1;
+select * from con_view where tag_id in (0, 1);
+drop view con_view cascade;
+drop table con_view_result;
+
+--
+-- Test partition table
+--
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+partition by list(tag_id)
+subpartition by list (tag_id)
+subpartition template
+(subpartition p1_1 values (0, 1),
+ subpartition p1_2 values (2),
+ subpartition p2_1 values (3, 4),
+ subpartition p2_2 values (5))
+(partition p1 values (0, 1, 2),
+ partition p2 values (3, 4, 5))
+distributed randomly;
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view;
+-- Test helper functions work on partition view
+-- start_ignore
+select matrixts_internal.vacuum_continuous_view('con_view', false);
+select matrixts_internal.info_continuous_view('con_view');
+-- end_ignore
+select matrixts_internal.rebuild_continuous_view('con_view');
+select * from con_view;
+drop view con_view cascade;
+drop table con_view_result;
+
+--
+-- Multiple continuous view 
+--
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+partition by list(tag_id)
+subpartition by list (tag_id)
+subpartition template
+(subpartition p1_1 values (0, 1),
+ subpartition p1_2 values (2),
+ subpartition p2_1 values (3, 4),
+ subpartition p2_2 values (5))
+(partition p1 values (0, 1, 2),
+ partition p2 values (3, 4, 5))
+distributed randomly;
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+create view con_view_1 with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), time_bucket('30 days', ts) as month
+from con_view_result group by month;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view;
+select * from con_view where tag_id = 0;
+select * from con_view_1;
+select * from con_view_1 where month = '2021-08-10 00:00:00'::timestamp;
+-- Test helper functions work on partition view
+drop view con_view cascade;
+drop view con_view_1 cascade;
+drop table con_view_result;
+-- Test locus of partition view
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+partition by list(tag_id)
+subpartition by list (tag_id)
+subpartition template
+(subpartition p1_1 values (0, 1),
+ subpartition p1_2 values (2),
+ subpartition p2_1 values (3, 4),
+ subpartition p2_2 values (5))
+(partition p1 values (0, 1, 2),
+ partition p2 values (3, 4, 5))
+distributed by (tag_id);
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+explain (costs off) select * from con_view;
+set enable_seqscan to off;
+set enable_bitmapscan to off;
+explain (costs off) select * from con_view where tag_id = 0;
+reset enable_seqscan;
+reset enable_bitmapscan;
+drop view con_view cascade;
+drop table con_view_result;

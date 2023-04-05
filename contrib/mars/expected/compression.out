@@ -1,0 +1,58 @@
+-- start_ignore
+CREATE EXTENSION IF NOT EXISTS mars;
+NOTICE:  extension "mars" already exists, skipping
+CREATE extension IF NOT EXISTS gp_debug_numsegments;
+NOTICE:  extension "gp_debug_numsegments" already exists, skipping
+SELECT gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+-- end_ignore
+CREATE TABLE foo(ts timestamp encoding (compresstype=lz4),
+                 tag int encoding (compresstype=lz4),
+                 c1 text encoding (compresstype=lz4),
+                 c2 float encoding (compresstype=lz4))
+       using mars with (group_param_col_ = "{ts in 1 min}")
+       distributed by (tag);
+INSERT INTO foo SELECT '2010-01-01 00:00:00'::TIMESTAMP + ('' || i * 20)::interval, i, 'text' || i, i * 0.6 FROM generate_series(1, 10) i;
+SELECT * FROM foo;
+            ts            | tag |   c1   | c2  
+--------------------------+-----+--------+-----
+ Fri Jan 01 00:00:20 2010 |   1 | text1  | 0.6
+ Fri Jan 01 00:00:40 2010 |   2 | text2  | 1.2
+ Fri Jan 01 00:01:00 2010 |   3 | text3  | 1.8
+ Fri Jan 01 00:01:20 2010 |   4 | text4  | 2.4
+ Fri Jan 01 00:01:40 2010 |   5 | text5  |   3
+ Fri Jan 01 00:02:00 2010 |   6 | text6  | 3.6
+ Fri Jan 01 00:02:20 2010 |   7 | text7  | 4.2
+ Fri Jan 01 00:02:40 2010 |   8 | text8  | 4.8
+ Fri Jan 01 00:03:00 2010 |   9 | text9  | 5.4
+ Fri Jan 01 00:03:20 2010 |  10 | text10 |   6
+(10 rows)
+
+DROP TABLE foo;
+CREATE TABLE foo(ts timestamp encoding (compresstype=zstd),
+                 tag int encoding (compresstype=zstd),
+                 c1 text encoding (compresstype=zstd),
+                 c2 float encoding (compresstype=zstd))
+       using mars with (group_param_col_ = "{ts in 1 min}")
+       distributed by (tag);;
+INSERT INTO foo SELECT '2010-01-01 00:00:00'::TIMESTAMP + ('' || i * 20)::interval, i, 'text' || i, i * 0.6 FROM generate_series(1, 10) i;
+SELECT * FROM foo;
+            ts            | tag |   c1   | c2  
+--------------------------+-----+--------+-----
+ Fri Jan 01 00:00:20 2010 |   1 | text1  | 0.6
+ Fri Jan 01 00:00:40 2010 |   2 | text2  | 1.2
+ Fri Jan 01 00:01:00 2010 |   3 | text3  | 1.8
+ Fri Jan 01 00:01:20 2010 |   4 | text4  | 2.4
+ Fri Jan 01 00:01:40 2010 |   5 | text5  |   3
+ Fri Jan 01 00:02:00 2010 |   6 | text6  | 3.6
+ Fri Jan 01 00:02:20 2010 |   7 | text7  | 4.2
+ Fri Jan 01 00:02:40 2010 |   8 | text8  | 4.8
+ Fri Jan 01 00:03:00 2010 |   9 | text9  | 5.4
+ Fri Jan 01 00:03:20 2010 |  10 | text10 |   6
+(10 rows)
+
+DROP TABLE foo;

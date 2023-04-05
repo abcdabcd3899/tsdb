@@ -1,0 +1,328 @@
+SET timezone TO 'UTC';
+\i sql/apm/expire_drop.sql
+----------------------------------------------------------
+-- Tests for following policy UDFs
+--   * apm_generic_expired
+--   * apm_generic_drop_partition
+--   * apm_generic_expired_set
+-- These UDF is for auto drop old partition.
+----------------------------------------------------------
+-- start_ignore
+CREATE EXTENSION matrixts;
+psql:sql/apm/expire_drop.sql:9: ERROR:  extension "matrixts" already exists
+SET enable_mergejoin TO off;
+SET enable_nestloop TO off;
+SET enable_parallel_mode TO off;
+SET gp_enable_multiphase_agg TO off;
+SET optimizer TO off;
+CREATE SCHEMA IF NOT EXISTS apm_test;
+psql:sql/apm/expire_drop.sql:15: NOTICE:  schema "apm_test" already exists, skipping
+SET matrix.ts_guc_apm_allow_dml TO ON;
+TRUNCATE matrixts_internal.apm_operation_log;
+TRUNCATE matrixts_internal.apm_rel_policy;
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+SET matrix.ts_guc_apm_allow_dml TO OFF;
+-- end_ignore
+---------------------------------------------
+---- apm_generic_expired
+---------------------------------------------
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_ts;
+psql:sql/apm/expire_drop.sql:28: NOTICE:  table "by_ts" does not exist, skipping
+CREATE TABLE apm_test.by_ts (ts timestamp, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (now() - '10 year'::interval) END (now() - '5 year'::interval) EVERY ('1 year') ) ;
+DROP TABLE IF EXISTS apm_test.by_tstz;
+psql:sql/apm/expire_drop.sql:34: NOTICE:  table "by_tstz" does not exist, skipping
+CREATE TABLE apm_test.by_tstz (ts timestamp with time zone, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (now() - '10 year'::interval) END (now() - '5 year'::interval) EVERY ('1 year') ) ;
+-- end_ignore
+-- should return '{NULL}' as partition boundary totally before now - 1 year, should drop
+SELECT matrixts_internal.apm_generic_expired(
+    NULL
+  , 'apm_test.by_ts_1_prt_yr_3'::regclass
+  , 'apm_test.by_ts'::regclass
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = 'apm_test.by_ts_1_prt_yr_3'::regclass))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{ "after": "1 year" }'
+);
+ apm_generic_expired 
+---------------------
+ {NULL}
+(1 row)
+
+-- should return '{NULL}' as partition boundary totally before now - 7 year, should drop
+SELECT matrixts_internal.apm_generic_expired(
+    NULL
+  , 'apm_test.by_ts_1_prt_yr_3'::regclass
+  , 'apm_test.by_ts'::regclass
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = 'apm_test.by_ts_1_prt_yr_3'::regclass))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{ "after": "7 year" }'
+);
+ apm_generic_expired 
+---------------------
+ {NULL}
+(1 row)
+
+-- should return NULL as partition boundary includes now - 8 year
+SELECT matrixts_internal.apm_generic_expired(
+    NULL
+  , 'apm_test.by_ts_1_prt_yr_3'::regclass
+  , 'apm_test.by_ts'::regclass
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = 'apm_test.by_ts_1_prt_yr_3'::regclass))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{ "after": "8 year" }'
+);
+ apm_generic_expired 
+---------------------
+ 
+(1 row)
+
+-- should return NULL as partition boundary totally after now - 9 year
+SELECT matrixts_internal.apm_generic_expired(
+    NULL
+  , 'apm_test.by_ts_1_prt_yr_3'::regclass
+  , 'apm_test.by_ts'::regclass
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = 'apm_test.by_ts_1_prt_yr_3'::regclass))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{ "after": "9 year" }'
+);
+ apm_generic_expired 
+---------------------
+ 
+(1 row)
+
+-- should return '{NULL}' as partition boundary totally before now - 1 year
+SELECT matrixts_internal.apm_generic_expired(
+    NULL
+  , 'apm_test.by_tstz_1_prt_yr_3'::regclass
+  , 'apm_test.by_tstz'::regclass
+  , 'apm_test.by_tstz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = 'apm_test.by_tstz_1_prt_yr_3'::regclass))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+  , '{ "after": "1 year" }'
+);
+ apm_generic_expired 
+---------------------
+ {NULL}
+(1 row)
+
+-- should return '{NULL}' as partition boundary totally before now - 7 year
+SELECT matrixts_internal.apm_generic_expired(
+    NULL
+  , 'apm_test.by_tstz_1_prt_yr_3'::regclass
+  , 'apm_test.by_tstz'::regclass
+  , 'apm_test.by_tstz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = 'apm_test.by_tstz_1_prt_yr_3'::regclass))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+  , '{ "after": "7 year" }'
+);
+ apm_generic_expired 
+---------------------
+ {NULL}
+(1 row)
+
+-- should return NULL as partition boundary includes now - 8 year
+SELECT matrixts_internal.apm_generic_expired(
+    NULL
+  , 'apm_test.by_tstz_1_prt_yr_3'::regclass
+  , 'apm_test.by_tstz'::regclass
+  , 'apm_test.by_tstz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = 'apm_test.by_tstz_1_prt_yr_3'::regclass))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+  , '{ "after": "8 year" }'
+);
+ apm_generic_expired 
+---------------------
+ 
+(1 row)
+
+-- should return NULL as partition boundary totally after now - 9 year
+SELECT matrixts_internal.apm_generic_expired(
+    NULL
+  , 'apm_test.by_tstz_1_prt_yr_3'::regclass
+  , 'apm_test.by_tstz'::regclass
+  , 'apm_test.by_tstz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = 'apm_test.by_tstz_1_prt_yr_3'::regclass))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+  , '{ "after": "9 year" }'
+);
+ apm_generic_expired 
+---------------------
+ 
+(1 row)
+
+ROLLBACK;
+------------------------------------
+---- apm_generic_drop_partition ----
+------------------------------------
+-- start_ignore
+CREATE TABLE apm_test.xyz(id int);
+psql:sql/apm/expire_drop.sql:129: NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'id' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+-- end_ignore
+-- should return true
+SELECT matrixts_internal.apm_generic_drop_partition(NULL, 'apm_test.xyz'::regclass, NULL, NULL, NULL, NULL, NULL, '{}'::matrixts_internal._apm_boundary);
+ apm_generic_drop_partition 
+----------------------------
+ t
+(1 row)
+
+-- should report partition does not exist
+SELECT matrixts_internal.apm_generic_drop_partition(NULL, 'apm_test.xyz'::regclass, NULL, NULL, NULL, NULL, NULL, '{}'::matrixts_internal._apm_boundary);
+psql:sql/apm/expire_drop.sql:134: ERROR:  relation "apm_test.xyz" does not exist
+LINE 1: ...atrixts_internal.apm_generic_drop_partition(NULL, 'apm_test....
+                                                             ^
+-- start_ignore
+CREATE SCHEMA IF NOT EXIST "a""b""C""";
+psql:sql/apm/expire_drop.sql:137: ERROR:  syntax error at or near "EXIST"
+LINE 1: CREATE SCHEMA IF NOT EXIST "a""b""C""";
+                             ^
+CREATE TABLE "a""b""C"""."x''""Y.""z"(id int);
+psql:sql/apm/expire_drop.sql:138: ERROR:  schema "a"b"C"" does not exist
+LINE 1: CREATE TABLE "a""b""C"""."x''""Y.""z"(id int);
+                     ^
+-- end_ignore
+-- should return true
+SELECT matrixts_internal.apm_generic_drop_partition(NULL, '"a""b""C"""."x''''""Y.""z"'::regclass, NULL, NULL, NULL, NULL, NULL, '{}'::matrixts_internal._apm_boundary);
+psql:sql/apm/expire_drop.sql:141: ERROR:  schema "a"b"C"" does not exist
+LINE 1: ...atrixts_internal.apm_generic_drop_partition(NULL, '"a""b""C"...
+                                                             ^
+-- should report partition does not exist
+SELECT matrixts_internal.apm_generic_drop_partition(NULL, '"a""b""C"""."x''''""Y.""z"'::regclass, NULL, NULL, NULL, NULL, NULL, '{}'::matrixts_internal._apm_boundary);
+psql:sql/apm/expire_drop.sql:143: ERROR:  schema "a"b"C"" does not exist
+LINE 1: ...atrixts_internal.apm_generic_drop_partition(NULL, '"a""b""C"...
+                                                             ^
+---------------------------------
+---- apm_generic_expired_set ----
+---------------------------------
+SHOW matrix.ts_guc_apm_allow_dml;
+ matrix.ts_guc_apm_allow_dml 
+-----------------------------
+ off
+(1 row)
+
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.expired_set;
+CREATE TABLE apm_test.expired_set (id int, year int, qtr int, day int, region text)
+DISTRIBUTED BY (id) PARTITION BY RANGE (year)
+(PARTITION yr START (2010) END (2012) EVERY (1));
+TRUNCATE matrixts_internal.apm_operation_log;
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+-- end_ignore
+-- should report error on invalid input
+SELECT matrixts_internal.apm_generic_expired_set(NULL, NULL, NULL, NULL);
+psql:sql/apm/expire_drop.sql:159: ERROR:  argument "rel" must not be NULL.
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_expired_set(regclass,integer,text,text) line 6 at RAISE
+SELECT matrixts_internal.apm_generic_expired_set('apm_test.expired_set'::regclass, 1, NULL, NULL);
+psql:sql/apm/expire_drop.sql:160: ERROR:  argument "action_name" must not be NULL.
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_expired_set(regclass,integer,text,text) line 12 at RAISE
+SELECT matrixts_internal.apm_generic_expired_set('apm_test.expired_set'::regclass, 1, 'fake_action', 'abc');
+psql:sql/apm/expire_drop.sql:161: ERROR:  Invalid interval expression: "abc".
+HINT:  Example '1 year'
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_expired_set(regclass,integer,text,text) line 27 at RAISE
+SELECT matrixts_internal.apm_generic_expired_set('apm_test.expired_set'::regclass, NULL, 'test_expire', '3 years');
+psql:sql/apm/expire_drop.sql:162: ERROR:  argument "cid" must not be NULL.
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_expired_set(regclass,integer,text,text) line 9 at RAISE
+-- should be empty
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+ reloid | action | disabled | check_func | check_args | act_func | act_args | version 
+--------+--------+----------+------------+------------+----------+----------+---------
+(0 rows)
+
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? | relname | class_id | class_name | action | operation | mod_field | old_val | new_val 
+----------+---------+----------+------------+--------+-----------+-----------+---------+---------
+(0 rows)
+
+TRUNCATE matrixts_internal.apm_operation_log;
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+-- should insert a new entry
+SELECT matrixts_internal.apm_generic_expired_set('apm_test.expired_set'::regclass, 1, 'test_expire', '3 years');
+psql:sql/apm/expire_drop.sql:173: WARNING:  relation "apm_test.expired_set" does not have a policy class to add
+ apm_generic_expired_set 
+-------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+        reloid        |   action    | disabled | check_func |      check_args      | act_func | act_args | version 
+----------------------+-------------+----------+------------+----------------------+----------+----------+---------
+ apm_test.expired_set | test_expire |          |            | {"after": "3 years"} |          |          | 
+(1 row)
+
+-- should have reset GUC to false
+SHOW matrix.ts_guc_apm_allow_dml;
+ matrix.ts_guc_apm_allow_dml 
+-----------------------------
+ off
+(1 row)
+
+-- should append 1 add record to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |       relname        | class_id | class_name |   action    | operation | mod_field  | old_val |       new_val        
+----------+----------------------+----------+------------+-------------+-----------+------------+---------+----------------------
+ t        | apm_test.expired_set |          |            | test_expire | add       | check_args |         | {"after": "3 years"}
+(1 row)
+
+-- should update to new value
+SELECT matrixts_internal.apm_generic_expired_set('apm_test.expired_set'::regclass, 1, 'test_expire', '4 years');
+psql:sql/apm/expire_drop.sql:183: WARNING:  relation "apm_test.expired_set" does not have a policy class to update
+ apm_generic_expired_set 
+-------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+        reloid        |   action    | disabled | check_func |      check_args      | act_func | act_args | version 
+----------------------+-------------+----------+------------+----------------------+----------+----------+---------
+ apm_test.expired_set | test_expire |          |            | {"after": "4 years"} |          |          | 
+(1 row)
+
+-- should append 1 modify record to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |       relname        | class_id | class_name |   action    | operation | mod_field  |       old_val        |       new_val        
+----------+----------------------+----------+------------+-------------+-----------+------------+----------------------+----------------------
+ t        | apm_test.expired_set |          |            | test_expire | add       | check_args |                      | {"after": "3 years"}
+ t        | apm_test.expired_set |          |            | test_expire | mod       | check_args | {"after": "3 years"} | {"after": "4 years"}
+(2 rows)
+
+-- should delete the entry
+SELECT matrixts_internal.apm_generic_expired_set('apm_test.expired_set'::regclass, 1, 'test_expire', NULL);
+psql:sql/apm/expire_drop.sql:191: WARNING:  relation "apm_test.expired_set" does not have a policy class to delete
+ apm_generic_expired_set 
+-------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+ reloid | action | disabled | check_func | check_args | act_func | act_args | version 
+--------+--------+----------+------------+------------+----------+----------+---------
+(0 rows)
+
+-- should append 1 drop record to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |       relname        | class_id | class_name |   action    | operation | mod_field  |       old_val        |       new_val        
+----------+----------------------+----------+------------+-------------+-----------+------------+----------------------+----------------------
+ t        | apm_test.expired_set |          |            | test_expire | add       | check_args |                      | {"after": "3 years"}
+ t        | apm_test.expired_set |          |            | test_expire | mod       | check_args | {"after": "3 years"} | {"after": "4 years"}
+ t        | apm_test.expired_set |          |            | test_expire | drop      |            |                      | 
+(3 rows)
+

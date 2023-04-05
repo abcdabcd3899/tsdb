@@ -1,0 +1,32 @@
+-- first() / last() on kinds of column types
+
+explain (costs off)
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;
+
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;

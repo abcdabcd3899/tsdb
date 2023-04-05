@@ -1,0 +1,83 @@
+create table :tname
+     ( batch int    :encoding
+     , i4 int4      :encoding
+     , i8 int8      :encoding
+     , f4 float4    :encoding
+     , f8 float8    :encoding
+     , ts timestamp :encoding
+     , tt text      :encoding
+     )
+ using mars
+  with (group_param_col_ = '{i4 in 10}')
+ distributed by (batch);
+
+-- the first batch is stored in specified format
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(0, 99) i;
+
+-- the second batch is stored in v0.1
+set mars.default_file_format to 'v0.1';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v1';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(100, 199) i;
+
+-- the third batch is stored in v1.0
+set mars.default_file_format to 'v1.0';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v2';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(200, 299) i;
+
+select * from :tname where i4 between  78 and  82;
+select * from :tname where i4 between 178 and 182;
+select * from :tname where i4 between 278 and 282;
+
+select sum(i4) as i4
+     , sum(i8) as i8
+     , sum(f4) as f4
+     , trunc(sum(f8)::numeric, 6) as f8
+     , max(ts) as ts
+     , count(tt) as tt
+  from :tname;
+
+select * from :tname
+except
+select * from :t_auto;
+
+-- verify the aux table schema
+\set tnamestr '''' :tname ''''
+
+select a.attname
+     , a.atttypid::regtype::name
+     , a.attstorage
+  from pg_attribute as a
+  join mx_mars as m
+    on a.attrelid = m.segrelid
+ where m.relid = :tnamestr::regclass
+  and a.attnum > 0
+ order by a.attnum
+;
+
+-- vi: syntax=sql et :

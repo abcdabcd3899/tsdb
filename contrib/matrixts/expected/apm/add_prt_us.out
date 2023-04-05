@@ -1,0 +1,2343 @@
+SET timezone TO 'America/Detroit';
+\i sql/apm/add_prt.sql
+----------------------------------------------------------
+-- Tests for following policy UDFs
+--   * apm_generic_incoming
+--   * apm_generic_append_partition
+--   * apm_generic_incoming_set
+-- These UDF is for auto-splitting default partition to
+-- create historical partitions.
+----------------------------------------------------------
+-- start_ignore
+CREATE EXTENSION matrixts;
+psql:sql/apm/add_prt.sql:10: ERROR:  extension "matrixts" already exists
+SET enable_mergejoin TO off;
+SET enable_nestloop TO off;
+SET enable_parallel_mode TO off;
+SET gp_enable_multiphase_agg TO off;
+SET optimizer TO off;
+CREATE SCHEMA IF NOT EXISTS apm_test;
+psql:sql/apm/add_prt.sql:16: NOTICE:  schema "apm_test" already exists, skipping
+SET matrix.ts_guc_apm_allow_dml TO ON;
+TRUNCATE matrixts_internal.apm_operation_log;
+TRUNCATE matrixts_internal.apm_rel_policy;
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+SET matrix.ts_guc_apm_allow_dml TO OFF;
+-- end_ignore
+------------------------------
+---- apm_generic_incoming ----
+------------------------------
+-- input checks
+-- start_ignore
+BEGIN;
+DROP TABLE IF EXISTS apm_test.incoming_by_ts;
+psql:sql/apm/add_prt.sql:31: NOTICE:  table "incoming_by_ts" does not exist, skipping
+CREATE TABLE apm_test.incoming_by_ts (ts timestamp, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+( PARTITION yr START (timestamp '2016-01-01') END (timestamp '2020-01-01') EVERY ('1 year') ) ;
+-- end_ignore
+-- should raise error: Must have "before" expression.
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33+08:00'::timestamptz
+  , 'apm_test.incoming_by_ts'::regclass
+  , NULL
+  , 'apm_test.incoming_by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL))
+  , '{"fakeconfig":"2 days"}'::json
+);
+psql:sql/apm/add_prt.sql:46: ERROR:  Must have "before" expression.
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_incoming(timestamp with time zone,regclass,regclass,regclass,matrixts_internal.apm_partition_item,matrixts_internal.apm_partition_item[],json) line 38 at RAISE
+ROLLBACK;
+-- start_ignore
+BEGIN;
+DROP TABLE IF EXISTS apm_test.by_hash;
+psql:sql/apm/add_prt.sql:51: NOTICE:  table "by_hash" does not exist, skipping
+CREATE TABLE apm_test.by_hash (a int, b int) PARTITION BY HASH (b);
+psql:sql/apm/add_prt.sql:52: NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'a' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+CREATE TABLE by_hash_0 PARTITION OF apm_test.by_hash FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+psql:sql/apm/add_prt.sql:53: NOTICE:  table has parent, setting distribution columns to match parent table
+CREATE TABLE by_hash_1 PARTITION OF apm_test.by_hash FOR VALUES WITH (MODULUS 2, REMAINDER 1);
+psql:sql/apm/add_prt.sql:54: NOTICE:  table has parent, setting distribution columns to match parent table
+-- end_ignore
+-- should return NULL for hash partition
+SELECT matrixts_internal.apm_generic_incoming(
+    NULL
+  , 'apm_test.by_hash'::regclass
+  , NULL
+  , 'apm_test.by_hash'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_hash'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_hash'::regclass, NULL))
+  , '{"before":"2 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+-- start_ignore
+BEGIN;
+DROP TABLE IF EXISTS apm_test.by_list;
+psql:sql/apm/add_prt.sql:71: NOTICE:  table "by_list" does not exist, skipping
+CREATE TABLE apm_test.by_list (type int, region text)
+DISTRIBUTED BY (region) PARTITION BY LIST (type)
+( PARTITION t1 VALUES (1), PARTITION t234 VALUES (2, 3, 4) ) ;
+-- end_ignore
+-- should return NULL for list partition
+SELECT matrixts_internal.apm_generic_incoming(
+    NULL
+  , 'apm_test.by_list'::regclass
+  , NULL
+  , 'apm_test.by_list'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_list'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_list'::regclass, NULL))
+  , '{"before":"2 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+-- start_ignore
+BEGIN;
+DROP TABLE IF EXISTS apm_test.by_int;
+psql:sql/apm/add_prt.sql:91: NOTICE:  table "by_int" does not exist, skipping
+CREATE TABLE apm_test.by_int (ts int, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+( PARTITION yr START (2010) END (2014) EVERY (1) ) ;
+-- end_ignore
+-- should return NULL for int partition
+SELECT matrixts_internal.apm_generic_incoming(
+    NULL
+  , 'apm_test.by_int'::regclass
+  , NULL
+  , 'apm_test.by_int'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_int'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_int'::regclass, NULL))
+  , '{"before":"2 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+-- start_ignore
+BEGIN;
+DROP TABLE IF EXISTS apm_test.by_bigint;
+psql:sql/apm/add_prt.sql:111: NOTICE:  table "by_bigint" does not exist, skipping
+CREATE TABLE apm_test.by_bigint (ts bigint, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+( PARTITION yr START (2010) END (2014) EVERY (1) ) ;
+-- end_ignore
+-- should return NULL for bigint partition
+SELECT matrixts_internal.apm_generic_incoming(
+    NULL
+  , 'apm_test.by_bigint'::regclass
+  , NULL
+  , 'apm_test.by_bigint'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_bigint'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_bigint'::regclass, NULL))
+  , '{"before":"2 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+-- start_ignore
+BEGIN;
+DROP TABLE IF EXISTS apm_test.by_max;
+psql:sql/apm/add_prt.sql:131: NOTICE:  table "by_max" does not exist, skipping
+CREATE TABLE apm_test.by_max (ts date, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+( PARTITION yr START (now()::date - '3 month'::interval) END (now()::date) EVERY ('1 month'::interval) ) ;
+ALTER TABLE apm_test.by_max ADD PARTITION max_part START (now()::date) INCLUSIVE;
+-- end_ignore
+-- should return NULL for partition from now() - '3 month' to max
+SELECT matrixts_internal.apm_generic_incoming(
+    NULL
+  , 'apm_test.by_max'::regclass
+  , NULL
+  , 'apm_test.by_max'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_max'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_max'::regclass, NULL))
+  , '{"before":"2 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+-- start_ignore
+BEGIN;
+DROP TABLE IF EXISTS apm_test.by_time;
+psql:sql/apm/add_prt.sql:152: NOTICE:  table "by_time" does not exist, skipping
+CREATE TABLE apm_test.by_time (ts time without time zone, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+( PARTITION hr START ('00:00') END ('04:00') EVERY ('1 hour') ) ;
+-- end_ignore
+-- should return NULL for time partition
+SELECT matrixts_internal.apm_generic_incoming(
+    NULL
+  , 'apm_test.by_time'::regclass
+  , NULL
+  , 'apm_test.by_time'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_time'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_time'::regclass, NULL))
+  , '{"before":"2 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+-- start_ignore
+BEGIN;
+DROP TABLE IF EXISTS apm_test.by_timetz;
+psql:sql/apm/add_prt.sql:172: NOTICE:  table "by_timetz" does not exist, skipping
+CREATE TABLE apm_test.by_timetz (ts time with time zone, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+( PARTITION hr START ('00:00+08:00') END ('04:00+08:00') EVERY ('1 hour'::interval) ) ;
+-- end_ignore
+-- should return NULL for timetz partition
+SELECT matrixts_internal.apm_generic_incoming(
+    NULL
+  , 'apm_test.by_timetz'::regclass
+  , NULL
+  , 'apm_test.by_timetz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_timetz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_timetz'::regclass, NULL))
+  , '{"before":"2 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+--------------------------------------
+---- apm_generic_append_partition ----
+--------------------------------------
+--*****************************************************************--
+--                      no existing partition                      --
+--*****************************************************************--
+---------------------------------------------------------- date as partition key
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_date;
+psql:sql/apm/add_prt.sql:201: NOTICE:  table "by_date" does not exist, skipping
+CREATE TABLE apm_test.by_date (ts date, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts);
+-- end_ignore
+-- should report root table only
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname | relname | partitiontype | partitionlevel | partitionisdefault | partitionboundary 
+--------------+----------------+---------+---------------+----------------+--------------------+-------------------
+ by_date      |                | by_date |               |              0 | f                  | 
+(1 row)
+
+-- should return {(-inf, inf, 2021-06-01 11:22:33.54321)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"3 days"}'::json
+);
+                      apm_generic_incoming                       
+-----------------------------------------------------------------
+ {"(-infinity,infinity,\"Wed Jun 02 11:22:33.54321 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"period":"1 week"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33.54321'::timestamptz
+      , 'apm_test.by_date'::regclass
+      , NULL
+      , 'apm_test.by_date'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+      , '{"before":"3 days"}'::json
+    ))
+);
+psql:sql/apm/add_prt.sql:239: NOTICE:  table has parent, setting distribution columns to match parent table
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 2 new partitions covering ['2021-5-30 11:22:33.54321' to +3days] with each period 1week
+---- 2021-05-24 ~ 2021-05-31 (Sunday ~ Saturday whole week)
+---- 2021-05-31 ~ 2021-06-07 (Sunday ~ Saturday whole week)
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname      | partitiontype | partitionlevel | partitionisdefault |                partitionboundary                 
+--------------+----------------+------------------+---------------+----------------+--------------------+--------------------------------------------------
+ by_date      |                | by_date          |               |              0 | f                  | 
+ by_date      | by_date        | by_date_1_prt_1  | range         |              1 | f                  | FOR VALUES FROM ('05-24-2021') TO ('05-31-2021')
+ by_date      | by_date        | by_date_1_prt_11 | range         |              1 | f                  | FOR VALUES FROM ('05-31-2021') TO ('06-07-2021')
+(3 rows)
+
+\d+ apm_test.by_date
+                          Partitioned table "apm_test.by_date"
+ Column | Type | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+------+-----------+----------+---------+----------+--------------+-------------
+ ts     | date |           |          |         | plain    |              | 
+ region | text |           |          |         | extended |              | 
+Partition key: RANGE (ts)
+Partitions: apm_test.by_date_1_prt_1 FOR VALUES FROM ('05-24-2021') TO ('05-31-2021'),
+            apm_test.by_date_1_prt_11 FOR VALUES FROM ('05-31-2021') TO ('06-07-2021')
+Distributed by: (region)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"3 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+---------------------------------------------------------- date as partition key
+----------------------------------------------- now is just a time_bucket border
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_date;
+psql:sql/apm/add_prt.sql:266: NOTICE:  table "by_date" does not exist, skipping
+CREATE TABLE apm_test.by_date (ts date, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts);
+-- end_ignore
+-- should report root table only
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname | relname | partitiontype | partitionlevel | partitionisdefault | partitionboundary 
+--------------+----------------+---------+---------------+----------------+--------------------+-------------------
+ by_date      |                | by_date |               |              0 | f                  | 
+(1 row)
+
+-- should return {(-inf, inf, 2021-06-03 00:00:00)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-05-31 00:00:00'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"3 days"}'::json
+);
+                   apm_generic_incoming                    
+-----------------------------------------------------------
+ {"(-infinity,infinity,\"Thu Jun 03 00:00:00 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-05-31 00:00:00'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"period":"1 week"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-05-31 00:00:00'::timestamptz
+      , 'apm_test.by_date'::regclass
+      , NULL
+      , 'apm_test.by_date'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+      , '{"before":"3 days"}'::json
+    ))
+);
+psql:sql/apm/add_prt.sql:304: NOTICE:  table has parent, setting distribution columns to match parent table
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 1 new partition covering ['2021-05-31 00:00:00' to +3days] with each period 1week
+---- 2021-05-31 ~ 2021-06-07 (Sunday ~ Saturday whole week)
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname     | partitiontype | partitionlevel | partitionisdefault |                partitionboundary                 
+--------------+----------------+-----------------+---------------+----------------+--------------------+--------------------------------------------------
+ by_date      |                | by_date         |               |              0 | f                  | 
+ by_date      | by_date        | by_date_1_prt_1 | range         |              1 | f                  | FOR VALUES FROM ('05-31-2021') TO ('06-07-2021')
+(2 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-05-31 00:00:00'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"3 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+---------------------------------------------------------- date as partition key
+-------------------------------------- extreme long table name with special char
+---------------------------------- "period" is significantly small than "before"
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test."'""'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂"",.<>/ 	?献上心脏！P两面包";
+psql:sql/apm/add_prt.sql:329: NOTICE:  identifier "'"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/ 	?献上心脏！P两面包" will be truncated to "'"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/ 	?献上心脏！P"
+psql:sql/apm/add_prt.sql:329: NOTICE:  table "'"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/ 	?献上心脏！P" does not exist, skipping
+CREATE TABLE apm_test."'""'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂"",.<>/ 	?献上心脏！P两面包" (ts date, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts);
+psql:sql/apm/add_prt.sql:331: NOTICE:  identifier "'"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/ 	?献上心脏！P两面包" will be truncated to "'"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/ 	?献上心脏！P"
+SELECT octet_length(relname), length(relname), relname
+FROM pg_class WHERE oid = '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass;
+ octet_length | length |                           relname                            
+--------------+--------+--------------------------------------------------------------
+           63 |     45 | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P
+(1 row)
+
+-- end_ignore
+-- should report root table only
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) ORDER BY partitionlevel, reloid;
+                         root_relname                         | parent_relname |                           relname                            | partitiontype | partitionlevel | partitionisdefault | partitionboundary 
+--------------------------------------------------------------+----------------+--------------------------------------------------------------+---------------+----------------+--------------------+-------------------
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P |                | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P |               |              0 | f                  | 
+(1 row)
+
+-- should return {(-inf, inf, 2021-06-06 11:22:33.54321)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , NULL
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL))
+  , '{"before":"7 days"}'::json
+);
+                      apm_generic_incoming                       
+-----------------------------------------------------------------
+ {"(-infinity,infinity,\"Sun Jun 06 11:22:33.54321 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , NULL
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL))
+  , '{"period":"2 days"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33.54321'::timestamptz
+      , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+      , NULL
+      , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL))
+      , '{"before":"7 days"}'::json
+    ))
+);
+psql:sql/apm/add_prt.sql:369: NOTICE:  table has parent, setting distribution columns to match parent table
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 4 new partitions covering ['2021-5-30 11:22:33.54321' to +7days] with each period 2 day
+---- 2021-05-30 ~ 2021-06-01
+---- 2021-06-01 ~ 2021-06-03
+---- 2021-06-03 ~ 2021-06-05
+---- 2021-06-05 ~ 2021-06-07
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) ORDER BY partitionlevel, reloid;
+                         root_relname                         |                        parent_relname                        |                            relname                             | partitiontype | partitionlevel | partitionisdefault |                partitionboundary                 
+--------------------------------------------------------------+--------------------------------------------------------------+----------------------------------------------------------------+---------------+----------------+--------------------+--------------------------------------------------
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P |                                                              | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P   |               |              0 | f                  | 
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上_1_prt_1  | range         |              1 | f                  | FOR VALUES FROM ('05-30-2021') TO ('06-01-2021')
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上_1_prt_11 | range         |              1 | f                  | FOR VALUES FROM ('06-01-2021') TO ('06-03-2021')
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上_1_prt_12 | range         |              1 | f                  | FOR VALUES FROM ('06-03-2021') TO ('06-05-2021')
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上_1_prt_13 | range         |              1 | f                  | FOR VALUES FROM ('06-05-2021') TO ('06-07-2021')
+(5 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , NULL
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL))
+  , '{"before":"7 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+----------------------------------------------------- timestamp as partition key
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_ts;
+psql:sql/apm/add_prt.sql:395: NOTICE:  table "by_ts" does not exist, skipping
+CREATE TABLE apm_test.by_ts (ts timestamp, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts);
+-- end_ignore
+-- should report root table only
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname | relname | partitiontype | partitionlevel | partitionisdefault | partitionboundary 
+--------------+----------------+---------+---------------+----------------+--------------------+-------------------
+ by_ts        |                | by_ts   |               |              0 | f                  | 
+(1 row)
+
+-- should return {(-inf, inf, 2021-07-15 11:22:36.54321)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"before":"1 month 15 day 3 sec"}'::json
+);
+                      apm_generic_incoming                       
+-----------------------------------------------------------------
+ {"(-infinity,infinity,\"Thu Jul 15 11:22:36.54321 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"period":"3 month"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33.54321'::timestamptz
+      , 'apm_test.by_ts'::regclass
+      , NULL
+      , 'apm_test.by_ts'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+      , '{"before":"1 month 15 day 3 sec"}'::json
+    ))
+);
+psql:sql/apm/add_prt.sql:433: NOTICE:  table has parent, setting distribution columns to match parent table
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 2 new partitions covering ['2021-5-30 11:22:33.54321' to +1month 15day 3sec] with each period 3 month
+---- 2021-04-01 ~ 2021-07-01
+---- 2021-07-01 ~ 2021-10-01
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |    relname     | partitiontype | partitionlevel | partitionisdefault |                              partitionboundary                               
+--------------+----------------+----------------+---------------+----------------+--------------------+------------------------------------------------------------------------------
+ by_ts        |                | by_ts          |               |              0 | f                  | 
+ by_ts        | by_ts          | by_ts_1_prt_1  | range         |              1 | f                  | FOR VALUES FROM ('Thu Apr 01 00:00:00 2021') TO ('Thu Jul 01 00:00:00 2021')
+ by_ts        | by_ts          | by_ts_1_prt_11 | range         |              1 | f                  | FOR VALUES FROM ('Thu Jul 01 00:00:00 2021') TO ('Fri Oct 01 00:00:00 2021')
+(3 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"before":"1 month 15 day 3 sec"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+--------------------------------------------------- timestamptz as partition key
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_tz;
+psql:sql/apm/add_prt.sql:457: NOTICE:  table "by_tz" does not exist, skipping
+CREATE TABLE apm_test.by_tz (ts timestamptz, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts);
+-- end_ignore
+-- should report root table only
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname | relname | partitiontype | partitionlevel | partitionisdefault | partitionboundary 
+--------------+----------------+---------+---------------+----------------+--------------------+-------------------
+ by_tz        |                | by_tz   |               |              0 | f                  | 
+(1 row)
+
+-- should return {(-inf, inf, 2021-05-30 11:42:33.54321)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_tz'::regclass
+  , NULL
+  , 'apm_test.by_tz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+  , '{"before":"20 min"}'::json
+);
+                      apm_generic_incoming                       
+-----------------------------------------------------------------
+ {"(-infinity,infinity,\"Sun May 30 11:42:33.54321 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_tz'::regclass
+  , NULL
+  , 'apm_test.by_tz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+  , '{"period":"1 hour"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33.54321'::timestamptz
+      , 'apm_test.by_tz'::regclass
+      , NULL
+      , 'apm_test.by_tz'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+      , '{"before":"20 min"}'::json
+    ))
+);
+psql:sql/apm/add_prt.sql:495: NOTICE:  table has parent, setting distribution columns to match parent table
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 1 new partitions covering ['2021-5-30 11:22:33.54321' to + 20min] with each period 8h
+---- 2021-05-30 11:00:00 ~ 2021-05-30 12:00:00
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |    relname    | partitiontype | partitionlevel | partitionisdefault |                                  partitionboundary                                   
+--------------+----------------+---------------+---------------+----------------+--------------------+--------------------------------------------------------------------------------------
+ by_tz        |                | by_tz         |               |              0 | f                  | 
+ by_tz        | by_tz          | by_tz_1_prt_1 | range         |              1 | f                  | FOR VALUES FROM ('Sun May 30 11:00:00 2021 EDT') TO ('Sun May 30 12:00:00 2021 EDT')
+(2 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_tz'::regclass
+  , NULL
+  , 'apm_test.by_tz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+  , '{"before":"20 min"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+--*****************************************************************--
+--                      has default partition                      --
+--*****************************************************************--
+---------------------------------------------------------- date as partition key
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_date;
+psql:sql/apm/add_prt.sql:523: NOTICE:  table "by_date" does not exist, skipping
+CREATE TABLE apm_test.by_date (ts date, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+(DEFAULT PARTITION hot);
+-- end_ignore
+-- should report existing partitions
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |      relname      | partitiontype | partitionlevel | partitionisdefault | partitionboundary 
+--------------+----------------+-------------------+---------------+----------------+--------------------+-------------------
+ by_date      |                | by_date           |               |              0 | f                  | 
+ by_date      | by_date        | by_date_1_prt_hot | range         |              1 | t                  | DEFAULT
+(2 rows)
+
+-- should return {(-inf, inf, 2021-06-02 11:22:33.54321)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"3 days"}'::json
+);
+                      apm_generic_incoming                       
+-----------------------------------------------------------------
+ {"(-infinity,infinity,\"Wed Jun 02 11:22:33.54321 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"period":"1 week"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33.54321'::timestamptz
+      , 'apm_test.by_date'::regclass
+      , NULL
+      , 'apm_test.by_date'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+      , '{"before":"3 days"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 2 new partitions covering ['2021-5-30 11:22:33.54321' to +3days] with each period 1week
+---- 2021-05-24 ~ 2021-05-31 (Sunday ~ Saturday whole week)
+---- 2021-05-31 ~ 2021-06-07 (Sunday ~ Saturday whole week)
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |      relname      | partitiontype | partitionlevel | partitionisdefault |                partitionboundary                 
+--------------+----------------+-------------------+---------------+----------------+--------------------+--------------------------------------------------
+ by_date      |                | by_date           |               |              0 | f                  | 
+ by_date      | by_date        | by_date_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM ('05-24-2021') TO ('05-31-2021')
+ by_date      | by_date        | by_date_1_prt_11  | range         |              1 | f                  | FOR VALUES FROM ('05-31-2021') TO ('06-07-2021')
+ by_date      | by_date        | by_date_1_prt_hot | range         |              1 | t                  | DEFAULT
+(4 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"3 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+---------------------------------------------------------- date as partition key
+-------------------------------------- now + period is just a time_bucket border
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_date;
+psql:sql/apm/add_prt.sql:587: NOTICE:  table "by_date" does not exist, skipping
+CREATE TABLE apm_test.by_date (ts date, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+(DEFAULT PARTITION hot);
+-- end_ignore
+-- should report existing partitions
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |      relname      | partitiontype | partitionlevel | partitionisdefault | partitionboundary 
+--------------+----------------+-------------------+---------------+----------------+--------------------+-------------------
+ by_date      |                | by_date           |               |              0 | f                  | 
+ by_date      | by_date        | by_date_1_prt_hot | range         |              1 | t                  | DEFAULT
+(2 rows)
+
+-- should return {(-inf, inf, 2021-05-31 00:00:00)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-05-24 00:00:00'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"1 week"}'::json
+);
+                   apm_generic_incoming                    
+-----------------------------------------------------------
+ {"(-infinity,infinity,\"Mon May 31 00:00:00 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-05-24 00:00:00'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"period":"1 week"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-05-24 00:00:00'::timestamptz
+      , 'apm_test.by_date'::regclass
+      , NULL
+      , 'apm_test.by_date'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+      , '{"before":"1 week"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 2 new partition covering ['2021-05-24 00:00:00' to +1week] with each period 1 week
+---- 2021-05-24 ~ 2021-05-31 (Sunday ~ Saturday whole week)
+---- 2021-05-31 ~ 2021-06-07 (Sunday ~ Saturday whole week)
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |      relname      | partitiontype | partitionlevel | partitionisdefault |                partitionboundary                 
+--------------+----------------+-------------------+---------------+----------------+--------------------+--------------------------------------------------
+ by_date      |                | by_date           |               |              0 | f                  | 
+ by_date      | by_date        | by_date_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM ('05-24-2021') TO ('05-31-2021')
+ by_date      | by_date        | by_date_1_prt_11  | range         |              1 | f                  | FOR VALUES FROM ('05-31-2021') TO ('06-07-2021')
+ by_date      | by_date        | by_date_1_prt_hot | range         |              1 | t                  | DEFAULT
+(4 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-05-24 00:00:00'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"1 week"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+---------------------------------------------------------- date as partition key
+-------------------------------------- extreme long table name with special char
+---------------------------------- "period" is significantly small than "before"
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test."'""'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂"",.<>/ 	?献上心脏！P两面包";
+psql:sql/apm/add_prt.sql:652: NOTICE:  identifier "'"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/ 	?献上心脏！P两面包" will be truncated to "'"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/ 	?献上心脏！P"
+psql:sql/apm/add_prt.sql:652: NOTICE:  table "'"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/ 	?献上心脏！P" does not exist, skipping
+CREATE TABLE apm_test."'""'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂"",.<>/ 	?献上心脏！P两面包" (ts date, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+(DEFAULT PARTITION hot);
+psql:sql/apm/add_prt.sql:655: NOTICE:  identifier "'"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/ 	?献上心脏！P两面包" will be truncated to "'"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/ 	?献上心脏！P"
+SELECT octet_length(relname), length(relname), relname
+FROM pg_class WHERE oid = '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass;
+ octet_length | length |                           relname                            
+--------------+--------+--------------------------------------------------------------
+           63 |     45 | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P
+(1 row)
+
+-- end_ignore
+-- should report existing partitions
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) ORDER BY partitionlevel, reloid;
+                         root_relname                         |                        parent_relname                        |                             relname                             | partitiontype | partitionlevel | partitionisdefault | partitionboundary 
+--------------------------------------------------------------+--------------------------------------------------------------+-----------------------------------------------------------------+---------------+----------------+--------------------+-------------------
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P |                                                              | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P    |               |              0 | f                  | 
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上_1_prt_hot | range         |              1 | t                  | DEFAULT
+(2 rows)
+
+-- should return {(-inf, inf, 2021-06-02 11:22:33.54321)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , NULL
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL))
+  , '{"before":"3 days"}'::json
+);
+                      apm_generic_incoming                       
+-----------------------------------------------------------------
+ {"(-infinity,infinity,\"Wed Jun 02 11:22:33.54321 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , NULL
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL))
+  , '{"period":"8h"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33.54321'::timestamptz
+      , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+      , NULL
+      , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL))
+      , '{"before":"3 days"}'::json
+    ))
+);
+psql:sql/apm/add_prt.sql:693: NOTICE:  partition key is date and partition period is @ 8 hourss, adjust to 1 day
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 4 new partitions covering ['2021-5-30 11:22:33.54321' to +7days] with each period 2 day
+---- 2021-05-30 ~ 2021-05-31
+---- 2021-05-31 ~ 2021-06-01
+---- 2021-06-01 ~ 2021-06-02
+---- 2021-06-02 ~ 2021-06-03
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) ORDER BY partitionlevel, reloid;
+                         root_relname                         |                        parent_relname                        |                             relname                             | partitiontype | partitionlevel | partitionisdefault |                partitionboundary                 
+--------------------------------------------------------------+--------------------------------------------------------------+-----------------------------------------------------------------+---------------+----------------+--------------------+--------------------------------------------------
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P |                                                              | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P    |               |              0 | f                  | 
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM ('05-30-2021') TO ('05-31-2021')
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上_1_prt_11  | range         |              1 | f                  | FOR VALUES FROM ('05-31-2021') TO ('06-01-2021')
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上_1_prt_12  | range         |              1 | f                  | FOR VALUES FROM ('06-01-2021') TO ('06-02-2021')
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上_1_prt_13  | range         |              1 | f                  | FOR VALUES FROM ('06-02-2021') TO ('06-03-2021')
+ '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上心脏！P | '"'|!@#$%^&为*()_+-斯=[]{}卡\;':蒂",.<>/        ?献上_1_prt_hot | range         |              1 | t                  | DEFAULT
+(6 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , NULL
+  , '"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('"apm_test"."''""''|!@#$%^&为*()_+-斯=[]{}卡\;'':蒂"",.<>/ 	?献上心脏！P两面包"'::regclass, NULL))
+  , '{"before":"3 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+----------------------------------------------------- timestamp as partition key
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_ts;
+psql:sql/apm/add_prt.sql:719: NOTICE:  table "by_ts" does not exist, skipping
+CREATE TABLE apm_test.by_ts (ts timestamp, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+(DEFAULT PARTITION hot);
+-- end_ignore
+-- should report existing partitions
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname     | partitiontype | partitionlevel | partitionisdefault | partitionboundary 
+--------------+----------------+-----------------+---------------+----------------+--------------------+-------------------
+ by_ts        |                | by_ts           |               |              0 | f                  | 
+ by_ts        | by_ts          | by_ts_1_prt_hot | range         |              1 | t                  | DEFAULT
+(2 rows)
+
+-- should return {(-inf, inf, 2021-07-15 11:22:36.54321)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"before":"1 month 15 day 3 sec"}'::json
+);
+                      apm_generic_incoming                       
+-----------------------------------------------------------------
+ {"(-infinity,infinity,\"Thu Jul 15 11:22:36.54321 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"period":"3 month"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33.54321'::timestamptz
+      , 'apm_test.by_ts'::regclass
+      , NULL
+      , 'apm_test.by_ts'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+      , '{"before":"1 month 15 day 3 sec"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 2 new partitions covering ['2021-5-30 11:22:33.54321' to +1month 15day 3sec] with each period 3 month
+---- 2021-04-01 ~ 2021-07-01
+---- 2021-07-01 ~ 2021-10-01
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname     | partitiontype | partitionlevel | partitionisdefault |                              partitionboundary                               
+--------------+----------------+-----------------+---------------+----------------+--------------------+------------------------------------------------------------------------------
+ by_ts        |                | by_ts           |               |              0 | f                  | 
+ by_ts        | by_ts          | by_ts_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM ('Thu Apr 01 00:00:00 2021') TO ('Thu Jul 01 00:00:00 2021')
+ by_ts        | by_ts          | by_ts_1_prt_11  | range         |              1 | f                  | FOR VALUES FROM ('Thu Jul 01 00:00:00 2021') TO ('Fri Oct 01 00:00:00 2021')
+ by_ts        | by_ts          | by_ts_1_prt_hot | range         |              1 | t                  | DEFAULT
+(4 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"before":"1 month 15 day 3 sec"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+--------------------------------------------------- timestamptz as partition key
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_tz;
+psql:sql/apm/add_prt.sql:782: NOTICE:  table "by_tz" does not exist, skipping
+CREATE TABLE apm_test.by_tz (ts timestamptz, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+(DEFAULT PARTITION hot);
+-- end_ignore
+-- should report existing partitions
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname     | partitiontype | partitionlevel | partitionisdefault | partitionboundary 
+--------------+----------------+-----------------+---------------+----------------+--------------------+-------------------
+ by_tz        |                | by_tz           |               |              0 | f                  | 
+ by_tz        | by_tz          | by_tz_1_prt_hot | range         |              1 | t                  | DEFAULT
+(2 rows)
+
+-- should return {(-inf, inf, 2021-05-30 11:42:33.54321)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_tz'::regclass
+  , NULL
+  , 'apm_test.by_tz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+  , '{"before":"20 min"}'::json
+);
+                      apm_generic_incoming                       
+-----------------------------------------------------------------
+ {"(-infinity,infinity,\"Sun May 30 11:42:33.54321 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_tz'::regclass
+  , NULL
+  , 'apm_test.by_tz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+  , '{"period":"1 hour"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33.54321'::timestamptz
+      , 'apm_test.by_tz'::regclass
+      , NULL
+      , 'apm_test.by_tz'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+      , '{"before":"20 min"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 1 new partitions covering ['2021-5-30 11:22:33.54321' to + 20min] with each period 8h
+---- 2021-05-30 11:00:00 ~ 2021-05-30 12:00:00
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname     | partitiontype | partitionlevel | partitionisdefault |                                  partitionboundary                                   
+--------------+----------------+-----------------+---------------+----------------+--------------------+--------------------------------------------------------------------------------------
+ by_tz        |                | by_tz           |               |              0 | f                  | 
+ by_tz        | by_tz          | by_tz_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM ('Sun May 30 11:00:00 2021 EDT') TO ('Sun May 30 12:00:00 2021 EDT')
+ by_tz        | by_tz          | by_tz_1_prt_hot | range         |              1 | t                  | DEFAULT
+(3 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_tz'::regclass
+  , NULL
+  , 'apm_test.by_tz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+  , '{"before":"20 min"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+--*****************************************************************--
+--                  existing range partition                       --
+--*****************************************************************--
+----------------------------------------------------- timestamp as partition key
+---------------------------------- "period" is significantly small than "before"
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.incoming_by_ts;
+psql:sql/apm/add_prt.sql:850: NOTICE:  table "incoming_by_ts" does not exist, skipping
+CREATE TABLE apm_test.incoming_by_ts (ts timestamp, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+( PARTITION yr START (timestamp '2016-01-01') END (timestamp '2020-01-01') EVERY ('1 year') ) ;
+-- end_ignore
+-- should have 5 partitions
+SELECT count(1)
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL);
+ count 
+-------
+     5
+(1 row)
+
+-- should return {(2020-01-01 00:00:00, inf, 2021-6-1 11:22:33)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33'::timestamptz
+  , 'apm_test.incoming_by_ts'::regclass
+  , NULL
+  , 'apm_test.incoming_by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL))
+  , '{"before":"2 days"}'::json
+);
+                               apm_generic_incoming                               
+----------------------------------------------------------------------------------
+ {"(\"Wed Jan 01 00:00:00 2020 EST\",infinity,\"Tue Jun 01 11:22:33 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33'::timestamptz
+  , 'apm_test.incoming_by_ts'::regclass
+  , NULL
+  , 'apm_test.incoming_by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL))
+  , '{"period":"8 h"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33'::timestamptz
+      , 'apm_test.incoming_by_ts'::regclass
+      , NULL
+      , 'apm_test.incoming_by_ts'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL))
+      , '{"before":"2 days"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 7 new partitions covering ['2021-5-30 11:22:33' to +2days] with each period 8h
+---- 2021-05-30 08:00 ~ 2021-05-30 16:00
+---- 2021-05-30 16:00 ~ 2021-05-31 00:00
+---- 2021-05-31 00:00 ~ 2021-05-31 08:00
+---- 2021-05-31 08:00 ~ 2021-05-31 16:00
+---- 2021-05-31 16:00 ~ 2021-06-01 00:00
+---- 2021-06-01 00:00 ~ 2021-06-01 08:00
+---- 2021-06-01 08:00 ~ 2021-06-01 16:00
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL) ORDER BY partitionlevel, reloid;
+  root_relname  | parent_relname |          relname          | partitiontype | partitionlevel | partitionisdefault |                              partitionboundary                               
+----------------+----------------+---------------------------+---------------+----------------+--------------------+------------------------------------------------------------------------------
+ incoming_by_ts |                | incoming_by_ts            |               |              0 | f                  | 
+ incoming_by_ts | incoming_by_ts | incoming_by_ts_1_prt_yr_1 | range         |              1 | f                  | FOR VALUES FROM ('Fri Jan 01 00:00:00 2016') TO ('Sun Jan 01 00:00:00 2017')
+ incoming_by_ts | incoming_by_ts | incoming_by_ts_1_prt_yr_2 | range         |              1 | f                  | FOR VALUES FROM ('Sun Jan 01 00:00:00 2017') TO ('Mon Jan 01 00:00:00 2018')
+ incoming_by_ts | incoming_by_ts | incoming_by_ts_1_prt_yr_3 | range         |              1 | f                  | FOR VALUES FROM ('Mon Jan 01 00:00:00 2018') TO ('Tue Jan 01 00:00:00 2019')
+ incoming_by_ts | incoming_by_ts | incoming_by_ts_1_prt_yr_4 | range         |              1 | f                  | FOR VALUES FROM ('Tue Jan 01 00:00:00 2019') TO ('Wed Jan 01 00:00:00 2020')
+ incoming_by_ts | incoming_by_ts | incoming_by_ts_1_prt_1    | range         |              1 | f                  | FOR VALUES FROM ('Sun May 30 08:00:00 2021') TO ('Sun May 30 16:00:00 2021')
+ incoming_by_ts | incoming_by_ts | incoming_by_ts_1_prt_11   | range         |              1 | f                  | FOR VALUES FROM ('Sun May 30 16:00:00 2021') TO ('Mon May 31 00:00:00 2021')
+ incoming_by_ts | incoming_by_ts | incoming_by_ts_1_prt_12   | range         |              1 | f                  | FOR VALUES FROM ('Mon May 31 00:00:00 2021') TO ('Mon May 31 08:00:00 2021')
+ incoming_by_ts | incoming_by_ts | incoming_by_ts_1_prt_13   | range         |              1 | f                  | FOR VALUES FROM ('Mon May 31 08:00:00 2021') TO ('Mon May 31 16:00:00 2021')
+ incoming_by_ts | incoming_by_ts | incoming_by_ts_1_prt_14   | range         |              1 | f                  | FOR VALUES FROM ('Mon May 31 16:00:00 2021') TO ('Tue Jun 01 00:00:00 2021')
+ incoming_by_ts | incoming_by_ts | incoming_by_ts_1_prt_15   | range         |              1 | f                  | FOR VALUES FROM ('Tue Jun 01 00:00:00 2021') TO ('Tue Jun 01 08:00:00 2021')
+ incoming_by_ts | incoming_by_ts | incoming_by_ts_1_prt_16   | range         |              1 | f                  | FOR VALUES FROM ('Tue Jun 01 08:00:00 2021') TO ('Tue Jun 01 16:00:00 2021')
+(12 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33'::timestamptz
+  , 'apm_test.incoming_by_ts'::regclass
+  , NULL
+  , 'apm_test.incoming_by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.incoming_by_ts'::regclass, NULL))
+  , '{"before":"2 days"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+----------------------------------------------------- timestamp as partition key
+--------------------------------------- existing partition squeeze new partition
+--------------------------------- "period" is significantly larger than "before"
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_ts;
+psql:sql/apm/add_prt.sql:920: NOTICE:  table "by_ts" does not exist, skipping
+CREATE TABLE apm_test.by_ts (ts timestamp, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+(DEFAULT PARTITION hot);
+ALTER TABLE apm_test.by_ts ADD PARTITION END('2021-4-17 01:02:03.658633');
+ALTER TABLE apm_test.by_ts ADD PARTITION START('2021-06-28 23:59:59.999999');
+-- end_ignore
+-- should report existing partitions
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname     | partitiontype | partitionlevel | partitionisdefault |                         partitionboundary                         
+--------------+----------------+-----------------+---------------+----------------+--------------------+-------------------------------------------------------------------
+ by_ts        |                | by_ts           |               |              0 | f                  | 
+ by_ts        | by_ts          | by_ts_1_prt_hot | range         |              1 | t                  | DEFAULT
+ by_ts        | by_ts          | by_ts_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM (MINVALUE) TO ('Sat Apr 17 01:02:03.658633 2021')
+ by_ts        | by_ts          | by_ts_1_prt_11  | range         |              1 | f                  | FOR VALUES FROM ('Mon Jun 28 23:59:59.999999 2021') TO (MAXVALUE)
+(4 rows)
+
+-- should return {(2021-04-17 01:02:03.658633, 2021-06-28 23:59:59.999999, 2021-06-30 11:22:36.54321)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"before":"1 month 3 sec"}'::json
+);
+                                                     apm_generic_incoming                                                     
+------------------------------------------------------------------------------------------------------------------------------
+ {"(\"Sat Apr 17 01:02:03.658633 2021 EDT\",\"Mon Jun 28 23:59:59.999999 2021 EDT\",\"Wed Jun 30 11:22:36.54321 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"period":"3 month"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33.54321'::timestamptz
+      , 'apm_test.by_ts'::regclass
+      , NULL
+      , 'apm_test.by_ts'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+      , '{"before":"1 month 3 sec"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 2 new partitions covering ['2021-5-30 11:22:33.54321' to +1month 3sec] with each period 3 month squeezed by existing parition
+---- 2021-04-17 01:02:03.658633 ~ 2021-06-28 23:59:59.999999
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname     | partitiontype | partitionlevel | partitionisdefault |                                     partitionboundary                                      
+--------------+----------------+-----------------+---------------+----------------+--------------------+--------------------------------------------------------------------------------------------
+ by_ts        |                | by_ts           |               |              0 | f                  | 
+ by_ts        | by_ts          | by_ts_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM (MINVALUE) TO ('Sat Apr 17 01:02:03.658633 2021')
+ by_ts        | by_ts          | by_ts_1_prt_11  | range         |              1 | f                  | FOR VALUES FROM ('Mon Jun 28 23:59:59.999999 2021') TO (MAXVALUE)
+ by_ts        | by_ts          | by_ts_1_prt_12  | range         |              1 | f                  | FOR VALUES FROM ('Sat Apr 17 01:02:03.658633 2021') TO ('Mon Jun 28 23:59:59.999999 2021')
+ by_ts        | by_ts          | by_ts_1_prt_hot | range         |              1 | t                  | DEFAULT
+(5 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"before":"1 month 3 sec"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+--------------------------------------------------- timestamptz as partition key
+--------------------------------------- existing partition squeeze new partition
+---------------------------- existing partition lays inside in the wanted period
+--------------------------------- "period" is significantly larger than "before"
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_tz;
+psql:sql/apm/add_prt.sql:987: NOTICE:  table "by_tz" does not exist, skipping
+CREATE TABLE apm_test.by_tz (ts timestamp, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+(DEFAULT PARTITION hot);
+ALTER TABLE apm_test.by_tz ADD PARTITION END('2021-4-17 01:02:03.658633');
+ALTER TABLE apm_test.by_tz ADD PARTITION START('2021-07-01 23:59:59.999999');
+ALTER TABLE apm_test.by_tz ADD PARTITION START('2021-04-18 15:29:52.000001') END('2021-4-22 03:04:05.778899');
+ALTER TABLE apm_test.by_tz ADD PARTITION START('2021-06-18 03:01:13.000002') END('2021-6-22 05:06:07.112233');
+-- end_ignore
+-- should report existing partitions
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname     | partitiontype | partitionlevel | partitionisdefault |                                     partitionboundary                                      
+--------------+----------------+-----------------+---------------+----------------+--------------------+--------------------------------------------------------------------------------------------
+ by_tz        |                | by_tz           |               |              0 | f                  | 
+ by_tz        | by_tz          | by_tz_1_prt_hot | range         |              1 | t                  | DEFAULT
+ by_tz        | by_tz          | by_tz_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM (MINVALUE) TO ('Sat Apr 17 01:02:03.658633 2021')
+ by_tz        | by_tz          | by_tz_1_prt_11  | range         |              1 | f                  | FOR VALUES FROM ('Thu Jul 01 23:59:59.999999 2021') TO (MAXVALUE)
+ by_tz        | by_tz          | by_tz_1_prt_12  | range         |              1 | f                  | FOR VALUES FROM ('Sun Apr 18 15:29:52.000001 2021') TO ('Thu Apr 22 03:04:05.778899 2021')
+ by_tz        | by_tz          | by_tz_1_prt_13  | range         |              1 | f                  | FOR VALUES FROM ('Fri Jun 18 03:01:13.000002 2021') TO ('Tue Jun 22 05:06:07.112233 2021')
+(6 rows)
+
+-- should return two gap zone
+--  { (2021-04-22 03:04:05.778899, 2021-06-18 03:01:13.000002, 2021-06-30 11:22:36.54321)
+--    (2021-06-22 05:06:07.112233, 2021-07-01 23:59:59.999999, 2021-06-30 11:22:36.54321)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_tz'::regclass
+  , NULL
+  , 'apm_test.by_tz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+  , '{"before":"1 month 3 sec"}'::json
+);
+                                                                                                                  apm_generic_incoming                                                                                                                   
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"(\"Thu Apr 22 03:04:05.778899 2021 EDT\",\"Fri Jun 18 03:01:13.000002 2021 EDT\",\"Wed Jun 30 11:22:36.54321 2021 EDT\")","(\"Tue Jun 22 05:06:07.112233 2021 EDT\",\"Thu Jul 01 23:59:59.999999 2021 EDT\",\"Wed Jun 30 11:22:36.54321 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_tz'::regclass
+  , NULL
+  , 'apm_test.by_tz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+  , '{"period":"3 month"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33.54321'::timestamptz
+      , 'apm_test.by_tz'::regclass
+      , NULL
+      , 'apm_test.by_tz'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+      , '{"before":"1 month 3 sec"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 2 new partitions covering ['2021-5-30 11:22:33.54321' to +1month 3sec] to fill gaps until 2021-07-01 00:00:00
+---- 2021-04-22 03:04:05.778899 ~ 2021-06-18 03:01:13.000002
+---- 2021-06-22 05:06:07.112233 ~ 2021-07-01 00:00:00
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname     | partitiontype | partitionlevel | partitionisdefault |                                     partitionboundary                                      
+--------------+----------------+-----------------+---------------+----------------+--------------------+--------------------------------------------------------------------------------------------
+ by_tz        |                | by_tz           |               |              0 | f                  | 
+ by_tz        | by_tz          | by_tz_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM (MINVALUE) TO ('Sat Apr 17 01:02:03.658633 2021')
+ by_tz        | by_tz          | by_tz_1_prt_11  | range         |              1 | f                  | FOR VALUES FROM ('Thu Jul 01 23:59:59.999999 2021') TO (MAXVALUE)
+ by_tz        | by_tz          | by_tz_1_prt_12  | range         |              1 | f                  | FOR VALUES FROM ('Sun Apr 18 15:29:52.000001 2021') TO ('Thu Apr 22 03:04:05.778899 2021')
+ by_tz        | by_tz          | by_tz_1_prt_13  | range         |              1 | f                  | FOR VALUES FROM ('Fri Jun 18 03:01:13.000002 2021') TO ('Tue Jun 22 05:06:07.112233 2021')
+ by_tz        | by_tz          | by_tz_1_prt_14  | range         |              1 | f                  | FOR VALUES FROM ('Thu Apr 22 03:04:05.778899 2021') TO ('Fri Jun 18 03:01:13.000002 2021')
+ by_tz        | by_tz          | by_tz_1_prt_15  | range         |              1 | f                  | FOR VALUES FROM ('Tue Jun 22 05:06:07.112233 2021') TO ('Thu Jul 01 00:00:00 2021')
+ by_tz        | by_tz          | by_tz_1_prt_hot | range         |              1 | t                  | DEFAULT
+(8 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_tz'::regclass
+  , NULL
+  , 'apm_test.by_tz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tz'::regclass, NULL))
+  , '{"before":"1 month 3 sec"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+---------------------------------------------------------- date as partition key
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_date;
+psql:sql/apm/add_prt.sql:1056: NOTICE:  table "by_date" does not exist, skipping
+CREATE TABLE apm_test.by_date (ts date, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+( PARTITION yr START ('2001-07-29') END ('2001-08-03') EVERY ('2 days'::interval) ) ;
+-- should return {(2001-08-03 00:00:00, inf, 2001-08-05 00:00:00)}
+SELECT * FROM matrixts_internal.apm_generic_incoming(
+    '2001-08-03'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"2 days"}'::json
+) AS res;
+                                       res                                        
+----------------------------------------------------------------------------------
+ {"(\"Fri Aug 03 00:00:00 2001 EDT\",infinity,\"Sun Aug 05 00:00:00 2001 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2001-08-03'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"period":"1 day"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2001-08-03'::timestamptz
+      , 'apm_test.by_date'::regclass
+      , NULL
+      , 'apm_test.by_date'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+      , '{"before":"2 days"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 3 new partitions covering ['2001-08-03' to +2days] with each period 1 day
+---- 2001-08-03 ~ 2001-08-04
+---- 2001-08-04 ~ 2001-08-05
+---- 2001-08-05 ~ 2001-08-06
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |      relname       | partitiontype | partitionlevel | partitionisdefault |                partitionboundary                 
+--------------+----------------+--------------------+---------------+----------------+--------------------+--------------------------------------------------
+ by_date      |                | by_date            |               |              0 | f                  | 
+ by_date      | by_date        | by_date_1_prt_yr_1 | range         |              1 | f                  | FOR VALUES FROM ('07-29-2001') TO ('07-31-2001')
+ by_date      | by_date        | by_date_1_prt_yr_2 | range         |              1 | f                  | FOR VALUES FROM ('07-31-2001') TO ('08-02-2001')
+ by_date      | by_date        | by_date_1_prt_yr_3 | range         |              1 | f                  | FOR VALUES FROM ('08-02-2001') TO ('08-03-2001')
+ by_date      | by_date        | by_date_1_prt_1    | range         |              1 | f                  | FOR VALUES FROM ('08-03-2001') TO ('08-04-2001')
+ by_date      | by_date        | by_date_1_prt_11   | range         |              1 | f                  | FOR VALUES FROM ('08-04-2001') TO ('08-05-2001')
+ by_date      | by_date        | by_date_1_prt_12   | range         |              1 | f                  | FOR VALUES FROM ('08-05-2001') TO ('08-06-2001')
+(7 rows)
+
+-- should return NULL if check again
+SELECT * FROM matrixts_internal.apm_generic_incoming(
+    '2001-08-03'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"2 days"}'::json
+) AS res;
+ res 
+-----
+ 
+(1 row)
+
+ROLLBACK;
+---------------------------------------------------------- date as partition key
+--------------------------------------now is just a partition time_bucket border
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_date;
+psql:sql/apm/add_prt.sql:1116: NOTICE:  table "by_date" does not exist, skipping
+CREATE TABLE apm_test.by_date(ts date, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+( PARTITION yr START ('2019-01-01'::date) END ('2021-01-01'::date) EVERY ('1 year'::interval) ) ;
+ALTER TABLE apm_test.by_date ADD PARTITION START ('2022-12-31'::date) END ('2023-01-01'::date);
+-- end_ignore
+-- should report existing partitions
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |      relname       | partitiontype | partitionlevel | partitionisdefault |                partitionboundary                 
+--------------+----------------+--------------------+---------------+----------------+--------------------+--------------------------------------------------
+ by_date      |                | by_date            |               |              0 | f                  | 
+ by_date      | by_date        | by_date_1_prt_yr_1 | range         |              1 | f                  | FOR VALUES FROM ('01-01-2019') TO ('01-01-2020')
+ by_date      | by_date        | by_date_1_prt_yr_2 | range         |              1 | f                  | FOR VALUES FROM ('01-01-2020') TO ('01-01-2021')
+ by_date      | by_date        | by_date_1_prt_1    | range         |              1 | f                  | FOR VALUES FROM ('12-31-2022') TO ('01-01-2023')
+(4 rows)
+
+-- should return {(2021-01-01, 2022-12-31, 2022-01-01)}
+SELECT * FROM matrixts_internal.apm_generic_incoming(
+    '2021-01-01 00:00:00'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"1 year"}'::json
+) AS res;
+                                                   res                                                    
+----------------------------------------------------------------------------------------------------------
+ {"(\"Fri Jan 01 00:00:00 2021 EST\",\"Sat Dec 31 00:00:00 2022 EST\",\"Sat Jan 01 00:00:00 2022 EST\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-01-01 00:00:00'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"period":"1 year"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-01-01 00:00:00'::timestamptz
+      , 'apm_test.by_date'::regclass
+      , NULL
+      , 'apm_test.by_date'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+      , '{"before":"1 year"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 2 new partitions
+---- 2021-01-01 ~ 2022-01-01
+---- 2022-01-01 ~ 2022-12-31
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |      relname       | partitiontype | partitionlevel | partitionisdefault |                partitionboundary                 
+--------------+----------------+--------------------+---------------+----------------+--------------------+--------------------------------------------------
+ by_date      |                | by_date            |               |              0 | f                  | 
+ by_date      | by_date        | by_date_1_prt_yr_1 | range         |              1 | f                  | FOR VALUES FROM ('01-01-2019') TO ('01-01-2020')
+ by_date      | by_date        | by_date_1_prt_yr_2 | range         |              1 | f                  | FOR VALUES FROM ('01-01-2020') TO ('01-01-2021')
+ by_date      | by_date        | by_date_1_prt_1    | range         |              1 | f                  | FOR VALUES FROM ('12-31-2022') TO ('01-01-2023')
+ by_date      | by_date        | by_date_1_prt_11   | range         |              1 | f                  | FOR VALUES FROM ('01-01-2021') TO ('01-01-2022')
+ by_date      | by_date        | by_date_1_prt_12   | range         |              1 | f                  | FOR VALUES FROM ('01-01-2022') TO ('12-31-2022')
+(6 rows)
+
+-- should return NULL if check again
+SELECT * FROM matrixts_internal.apm_generic_incoming(
+    '2021-01-01 00:00:00'::timestamptz
+  , 'apm_test.by_date'::regclass
+  , NULL
+  , 'apm_test.by_date'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_date'::regclass, NULL))
+  , '{"before":"1 year"}'::json
+) AS res;
+ res 
+-----
+ 
+(1 row)
+
+ROLLBACK;
+----------------------------------------------------- timestamp as partition key
+--------------------------------------- existing partition squeeze new partition
+---------------------------- existing partition lays inside in the wanted period
+-------------------------------- "period" is significantly smaller than "before"
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_ts;
+psql:sql/apm/add_prt.sql:1184: NOTICE:  table "by_ts" does not exist, skipping
+CREATE TABLE apm_test.by_ts (ts timestamp, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts)
+(DEFAULT PARTITION hot);
+ALTER TABLE apm_test.by_ts ADD PARTITION END('2021-4-17 01:02:03.658633');
+ALTER TABLE apm_test.by_ts ADD PARTITION START('2021-07-01 23:59:59.999999');
+ALTER TABLE apm_test.by_ts ADD PARTITION START('2021-04-18 15:29:52.000001') END('2021-4-22 03:04:05.778899');
+ALTER TABLE apm_test.by_ts ADD PARTITION START('2021-05-30 10:12:13.000004') END('2021-6-10 10:51:21.223344');
+ALTER TABLE apm_test.by_ts ADD PARTITION START('2021-06-18 03:01:13.000002') END('2021-6-22 05:06:07.112233');
+-- end_ignore
+-- should report existing partitions
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname     | partitiontype | partitionlevel | partitionisdefault |                                     partitionboundary                                      
+--------------+----------------+-----------------+---------------+----------------+--------------------+--------------------------------------------------------------------------------------------
+ by_ts        |                | by_ts           |               |              0 | f                  | 
+ by_ts        | by_ts          | by_ts_1_prt_hot | range         |              1 | t                  | DEFAULT
+ by_ts        | by_ts          | by_ts_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM (MINVALUE) TO ('Sat Apr 17 01:02:03.658633 2021')
+ by_ts        | by_ts          | by_ts_1_prt_11  | range         |              1 | f                  | FOR VALUES FROM ('Thu Jul 01 23:59:59.999999 2021') TO (MAXVALUE)
+ by_ts        | by_ts          | by_ts_1_prt_12  | range         |              1 | f                  | FOR VALUES FROM ('Sun Apr 18 15:29:52.000001 2021') TO ('Thu Apr 22 03:04:05.778899 2021')
+ by_ts        | by_ts          | by_ts_1_prt_13  | range         |              1 | f                  | FOR VALUES FROM ('Sun May 30 10:12:13.000004 2021') TO ('Thu Jun 10 10:51:21.223344 2021')
+ by_ts        | by_ts          | by_ts_1_prt_14  | range         |              1 | f                  | FOR VALUES FROM ('Fri Jun 18 03:01:13.000002 2021') TO ('Tue Jun 22 05:06:07.112233 2021')
+(7 rows)
+
+-- should return two gap zone
+--  { (2021-06-10 10:51:21.223344, 2021-06-18 03:01:13.000002, 2021-06-30 11:22:36.54321)
+--    (2021-06-22 05:06:07.112233, 2021-07-01 23:59:59.999999, 2021-06-30 11:22:36.54321)}
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"before":"1 month 3 sec"}'::json
+);
+                                                                                                                  apm_generic_incoming                                                                                                                   
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"(\"Thu Jun 10 10:51:21.223344 2021 EDT\",\"Fri Jun 18 03:01:13.000002 2021 EDT\",\"Wed Jun 30 11:22:36.54321 2021 EDT\")","(\"Tue Jun 22 05:06:07.112233 2021 EDT\",\"Thu Jul 01 23:59:59.999999 2021 EDT\",\"Wed Jun 30 11:22:36.54321 2021 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"period":"3 days"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2021-5-30 11:22:33.54321'::timestamptz
+      , 'apm_test.by_ts'::regclass
+      , NULL
+      , 'apm_test.by_ts'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+      , '{"before":"1 month 3 sec"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 8 new partitions covering ['2021-5-30 11:22:33.54321' to +1month 3sec] to fill gaps
+---- 2021-06-10 10:51:21.223344 ~ 2021-06-11 00:00:00
+---- 2021-06-11 00:00:00 ~ 2021-06-14 00:00:00
+---- 2021-06-14 00:00:00 ~ 2021-06-17 00:00:00
+---- 2021-06-17 00:00:00 ~ 2021-06-18 03:01:13.000002
+---- 2021-06-22 05:06:07.112233 ~ 2021-06-23 00:00:00
+---- 2021-06-23 00:00:00 ~ 2021-06-26 00:00:00
+---- 2021-06-26 00:00:00 ~ 2021-06-29 00:00:00
+---- 2021-06-29 00:00:00 ~ 2021-07-01 23:59:59.999999
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |     relname     | partitiontype | partitionlevel | partitionisdefault |                                     partitionboundary                                      
+--------------+----------------+-----------------+---------------+----------------+--------------------+--------------------------------------------------------------------------------------------
+ by_ts        |                | by_ts           |               |              0 | f                  | 
+ by_ts        | by_ts          | by_ts_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM (MINVALUE) TO ('Sat Apr 17 01:02:03.658633 2021')
+ by_ts        | by_ts          | by_ts_1_prt_11  | range         |              1 | f                  | FOR VALUES FROM ('Thu Jul 01 23:59:59.999999 2021') TO (MAXVALUE)
+ by_ts        | by_ts          | by_ts_1_prt_12  | range         |              1 | f                  | FOR VALUES FROM ('Sun Apr 18 15:29:52.000001 2021') TO ('Thu Apr 22 03:04:05.778899 2021')
+ by_ts        | by_ts          | by_ts_1_prt_13  | range         |              1 | f                  | FOR VALUES FROM ('Sun May 30 10:12:13.000004 2021') TO ('Thu Jun 10 10:51:21.223344 2021')
+ by_ts        | by_ts          | by_ts_1_prt_14  | range         |              1 | f                  | FOR VALUES FROM ('Fri Jun 18 03:01:13.000002 2021') TO ('Tue Jun 22 05:06:07.112233 2021')
+ by_ts        | by_ts          | by_ts_1_prt_15  | range         |              1 | f                  | FOR VALUES FROM ('Thu Jun 10 10:51:21.223344 2021') TO ('Fri Jun 11 00:00:00 2021')
+ by_ts        | by_ts          | by_ts_1_prt_16  | range         |              1 | f                  | FOR VALUES FROM ('Fri Jun 11 00:00:00 2021') TO ('Mon Jun 14 00:00:00 2021')
+ by_ts        | by_ts          | by_ts_1_prt_17  | range         |              1 | f                  | FOR VALUES FROM ('Mon Jun 14 00:00:00 2021') TO ('Thu Jun 17 00:00:00 2021')
+ by_ts        | by_ts          | by_ts_1_prt_18  | range         |              1 | f                  | FOR VALUES FROM ('Thu Jun 17 00:00:00 2021') TO ('Fri Jun 18 03:01:13.000002 2021')
+ by_ts        | by_ts          | by_ts_1_prt_19  | range         |              1 | f                  | FOR VALUES FROM ('Tue Jun 22 05:06:07.112233 2021') TO ('Wed Jun 23 00:00:00 2021')
+ by_ts        | by_ts          | by_ts_1_prt_110 | range         |              1 | f                  | FOR VALUES FROM ('Wed Jun 23 00:00:00 2021') TO ('Sat Jun 26 00:00:00 2021')
+ by_ts        | by_ts          | by_ts_1_prt_111 | range         |              1 | f                  | FOR VALUES FROM ('Sat Jun 26 00:00:00 2021') TO ('Tue Jun 29 00:00:00 2021')
+ by_ts        | by_ts          | by_ts_1_prt_112 | range         |              1 | f                  | FOR VALUES FROM ('Tue Jun 29 00:00:00 2021') TO ('Thu Jul 01 23:59:59.999999 2021')
+ by_ts        | by_ts          | by_ts_1_prt_hot | range         |              1 | t                  | DEFAULT
+(15 rows)
+
+-- should return NULL if check again
+SELECT matrixts_internal.apm_generic_incoming(
+    '2021-5-30 11:22:33.54321'::timestamptz
+  , 'apm_test.by_ts'::regclass
+  , NULL
+  , 'apm_test.by_ts'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_ts'::regclass, NULL))
+  , '{"before":"1 month 3 sec"}'::json
+);
+ apm_generic_incoming 
+----------------------
+ 
+(1 row)
+
+ROLLBACK;
+--------------------------------------------------- timestamptz as partition key
+--------------------------------- multiple existing partition inside wanted zone
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_tstz_0;
+psql:sql/apm/add_prt.sql:1261: NOTICE:  table "by_tstz_0" does not exist, skipping
+DROP TABLE IF EXISTS apm_test.by_tstz_1;
+psql:sql/apm/add_prt.sql:1262: NOTICE:  table "by_tstz_1" does not exist, skipping
+DROP TABLE IF EXISTS apm_test.by_tstz;
+psql:sql/apm/add_prt.sql:1263: NOTICE:  table "by_tstz" does not exist, skipping
+CREATE TABLE apm_test.by_tstz(ts timestamp with time zone, region text)
+DISTRIBUTED BY (region) PARTITION BY RANGE (ts);
+CREATE TABLE by_tstz_0 PARTITION OF apm_test.by_tstz FOR VALUES FROM ('2020-03-02 01:33:41') TO ('2020-03-03 01:33:41');
+psql:sql/apm/add_prt.sql:1266: NOTICE:  table has parent, setting distribution columns to match parent table
+CREATE TABLE by_tstz_1 PARTITION OF apm_test.by_tstz FOR VALUES FROM ('2020-03-05 01:33:41') TO ('2020-03-08 01:33:41');
+psql:sql/apm/add_prt.sql:1267: NOTICE:  table has parent, setting distribution columns to match parent table
+-- end_ignore
+-- should report existing partitions
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |  relname  | partitiontype | partitionlevel | partitionisdefault |                                  partitionboundary                                   
+--------------+----------------+-----------+---------------+----------------+--------------------+--------------------------------------------------------------------------------------
+ by_tstz      |                | by_tstz   |               |              0 | f                  | 
+ by_tstz      | by_tstz        | by_tstz_0 | range         |              1 | f                  | FOR VALUES FROM ('Mon Mar 02 01:33:41 2020 EST') TO ('Tue Mar 03 01:33:41 2020 EST')
+ by_tstz      | by_tstz        | by_tstz_1 | range         |              1 | f                  | FOR VALUES FROM ('Thu Mar 05 01:33:41 2020 EST') TO ('Sun Mar 08 01:33:41 2020 EST')
+(3 rows)
+
+-- should return three gap zone
+--  { (-inf, 2020-03-02 01:33:41, 2020-03-13 00:00:00)
+--    (2020-03-03 01:33:41, 2020-03-05 01:33:41, 2020-03-13 00:00:00)
+--    (2020-03-08 01:33:41, inf, 2020-03-13 00:00:00)}
+SELECT *
+FROM matrixts_internal.apm_generic_incoming(
+    '2020-03-01'::timestamptz
+  , 'apm_test.by_tstz'::regclass
+  , NULL
+  , 'apm_test.by_tstz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+  , '{"before":"12 days"}'::json
+) AS res;
+                                                                                                                                   res                                                                                                                                   
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"(-infinity,\"Mon Mar 02 01:33:41 2020 EST\",\"Fri Mar 13 00:00:00 2020 EDT\")","(\"Tue Mar 03 01:33:41 2020 EST\",\"Thu Mar 05 01:33:41 2020 EST\",\"Fri Mar 13 00:00:00 2020 EDT\")","(\"Sun Mar 08 01:33:41 2020 EST\",infinity,\"Fri Mar 13 00:00:00 2020 EDT\")"}
+(1 row)
+
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2020-03-01'::timestamptz
+  , 'apm_test.by_tstz'::regclass
+  , NULL
+  , 'apm_test.by_tstz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+  , '{"period":"1 day"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2020-03-01'::timestamptz
+      , 'apm_test.by_tstz'::regclass
+      , NULL
+      , 'apm_test.by_tstz'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+      , '{"before":"12 days"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should have 11 new partitions covering ['2020-03-01' to +12days] to fill gaps
+---- 2020-03-01 00:00:00 ~ 2020-03-02 00:00:00
+---- 2020-03-02 00:00:00 ~ 2020-03-02 01:33:41
+---- 2020-03-03 01:33:41 ~ 2020-03-04 00:00:00
+---- 2020-03-04 00:00:00 ~ 2020-03-05 00:00:00
+---- 2020-03-05 00:00:00 ~ 2020-03-05 01:33:41
+---- 2020-03-08 01:33:41 ~ 2020-03-09 00:00:00
+---- 2020-03-09 00:00:00 ~ 2020-03-10 00:00:00
+---- 2020-03-10 00:00:00 ~ 2020-03-11 00:00:00
+---- 2020-03-11 00:00:00 ~ 2020-03-12 00:00:00
+---- 2020-03-12 00:00:00 ~ 2020-03-13 00:00:00
+---- 2020-03-13 00:00:00 ~ 2020-03-14 00:00:00
+SELECT root_relname, parent_relname, relname, partitiontype, partitionlevel, partitionisdefault, partitionboundary
+FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) ORDER BY partitionlevel, reloid;
+ root_relname | parent_relname |      relname      | partitiontype | partitionlevel | partitionisdefault |                                  partitionboundary                                   
+--------------+----------------+-------------------+---------------+----------------+--------------------+--------------------------------------------------------------------------------------
+ by_tstz      |                | by_tstz           |               |              0 | f                  | 
+ by_tstz      | by_tstz        | by_tstz_0         | range         |              1 | f                  | FOR VALUES FROM ('Mon Mar 02 01:33:41 2020 EST') TO ('Tue Mar 03 01:33:41 2020 EST')
+ by_tstz      | by_tstz        | by_tstz_1         | range         |              1 | f                  | FOR VALUES FROM ('Thu Mar 05 01:33:41 2020 EST') TO ('Sun Mar 08 01:33:41 2020 EST')
+ by_tstz      | by_tstz        | by_tstz_1_prt_1   | range         |              1 | f                  | FOR VALUES FROM ('Sun Mar 01 00:00:00 2020 EST') TO ('Mon Mar 02 00:00:00 2020 EST')
+ by_tstz      | by_tstz        | by_tstz_1_prt_11  | range         |              1 | f                  | FOR VALUES FROM ('Mon Mar 02 00:00:00 2020 EST') TO ('Mon Mar 02 01:33:41 2020 EST')
+ by_tstz      | by_tstz        | by_tstz_1_prt_12  | range         |              1 | f                  | FOR VALUES FROM ('Tue Mar 03 01:33:41 2020 EST') TO ('Wed Mar 04 00:00:00 2020 EST')
+ by_tstz      | by_tstz        | by_tstz_1_prt_13  | range         |              1 | f                  | FOR VALUES FROM ('Wed Mar 04 00:00:00 2020 EST') TO ('Thu Mar 05 00:00:00 2020 EST')
+ by_tstz      | by_tstz        | by_tstz_1_prt_14  | range         |              1 | f                  | FOR VALUES FROM ('Thu Mar 05 00:00:00 2020 EST') TO ('Thu Mar 05 01:33:41 2020 EST')
+ by_tstz      | by_tstz        | by_tstz_1_prt_15  | range         |              1 | f                  | FOR VALUES FROM ('Sun Mar 08 01:33:41 2020 EST') TO ('Mon Mar 09 00:00:00 2020 EDT')
+ by_tstz      | by_tstz        | by_tstz_1_prt_16  | range         |              1 | f                  | FOR VALUES FROM ('Mon Mar 09 00:00:00 2020 EDT') TO ('Tue Mar 10 00:00:00 2020 EDT')
+ by_tstz      | by_tstz        | by_tstz_1_prt_17  | range         |              1 | f                  | FOR VALUES FROM ('Tue Mar 10 00:00:00 2020 EDT') TO ('Wed Mar 11 00:00:00 2020 EDT')
+ by_tstz      | by_tstz        | by_tstz_1_prt_18  | range         |              1 | f                  | FOR VALUES FROM ('Wed Mar 11 00:00:00 2020 EDT') TO ('Thu Mar 12 00:00:00 2020 EDT')
+ by_tstz      | by_tstz        | by_tstz_1_prt_19  | range         |              1 | f                  | FOR VALUES FROM ('Thu Mar 12 00:00:00 2020 EDT') TO ('Fri Mar 13 00:00:00 2020 EDT')
+ by_tstz      | by_tstz        | by_tstz_1_prt_110 | range         |              1 | f                  | FOR VALUES FROM ('Fri Mar 13 00:00:00 2020 EDT') TO ('Sat Mar 14 00:00:00 2020 EDT')
+(14 rows)
+
+-- should return NULL if check again
+SELECT *
+FROM matrixts_internal.apm_generic_incoming(
+    '2020-03-01'::timestamptz
+  , 'apm_test.by_tstz'::regclass
+  , NULL
+  , 'apm_test.by_tstz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+  , '{"before":"12 days"}'::json
+) AS res;
+ res 
+-----
+ 
+(1 row)
+
+ROLLBACK;
+----------------------------------
+---- apm_generic_incoming_set ----
+----------------------------------
+SHOW matrix.ts_guc_apm_allow_dml;
+ matrix.ts_guc_apm_allow_dml 
+-----------------------------
+ off
+(1 row)
+
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.incoming_set;
+CREATE TABLE apm_test.incoming_set (id int, year int, qtr int, day int, region text)
+DISTRIBUTED BY (id) PARTITION BY RANGE (year)
+(PARTITION yr START (2010) END (2012) EVERY (1));
+TRUNCATE matrixts_internal.apm_operation_log;
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+-- end_ignore
+-- should report error on invalid input
+SELECT matrixts_internal.apm_generic_incoming_set(NULL, NULL, NULL, NULL);
+psql:sql/apm/add_prt.sql:1352: ERROR:  argument "rel" must not be NULL.
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_incoming_set(regclass,integer,text,text) line 15 at RAISE
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, NULL, NULL);
+psql:sql/apm/add_prt.sql:1353: ERROR:  argument "action_name" must not be NULL.
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_incoming_set(regclass,integer,text,text) line 21 at RAISE
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'fake_action', 'abc');
+psql:sql/apm/add_prt.sql:1354: ERROR:  Invalid argument expression: "abc".
+HINT:  Example '{ "before": "3 days", "period": "8 hour", "storage_type": "sortheap" }'
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_incoming_set(regclass,integer,text,text) line 39 at RAISE
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'fake_action', '{ "before": "bcd" }');
+psql:sql/apm/add_prt.sql:1355: ERROR:  Invalid "before" expression: bcd.
+HINT:  Example '{ "before": "3 days", ... }'
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_incoming_set(regclass,integer,text,text) line 47 at RAISE
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'fake_action', '{ "period": "def" }');
+psql:sql/apm/add_prt.sql:1356: ERROR:  Invalid "period" expression: def.
+HINT:  Example '{ "period": "8 hours", ... }'
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_incoming_set(regclass,integer,text,text) line 55 at RAISE
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'fake_action', '{ "before": "efg", "period": "xyz" }');
+psql:sql/apm/add_prt.sql:1357: ERROR:  Invalid "before" expression: efg.
+HINT:  Example '{ "before": "3 days", ... }'
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_incoming_set(regclass,integer,text,text) line 47 at RAISE
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, NULL, 'test_incoming', '{"before": "3 days", "period": "8 hour"}');
+psql:sql/apm/add_prt.sql:1358: ERROR:  argument "cid" must not be NULL.
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_incoming_set(regclass,integer,text,text) line 18 at RAISE
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+ reloid | action | disabled | check_func | check_args | act_func | act_args | version 
+--------+--------+----------+------------+------------+----------+----------+---------
+(0 rows)
+
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? | relname | class_id | class_name | action | operation | mod_field | old_val | new_val 
+----------+---------+----------+------------+--------+-----------+-----------+---------+---------
+(0 rows)
+
+TRUNCATE matrixts_internal.apm_operation_log;
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+-- should insert a new entry
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'test_incoming', '{"before": "3 days", "period": "8 hour"}');
+psql:sql/apm/add_prt.sql:1367: WARNING:  relation "apm_test.incoming_set" does not have a policy class to add
+ apm_generic_incoming_set 
+--------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+        reloid         |    action     | disabled | check_func |      check_args      | act_func |       act_args       | version 
+-----------------------+---------------+----------+------------+----------------------+----------+----------------------+---------
+ apm_test.incoming_set | test_incoming |          |            | {"before": "3 days"} |          | {"period": "8 hour"} | 
+(1 row)
+
+-- should have reset GUC to false
+SHOW matrix.ts_guc_apm_allow_dml;
+ matrix.ts_guc_apm_allow_dml 
+-----------------------------
+ off
+(1 row)
+
+-- should append 2 add records to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |        relname        | class_id | class_name |    action     | operation | mod_field  | old_val |       new_val        
+----------+-----------------------+----------+------------+---------------+-----------+------------+---------+----------------------
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |         | {"before": "3 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |         | {"period": "8 hour"}
+(2 rows)
+
+-- should update act_args only
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'test_incoming', '{"period": "1 hour"}');
+psql:sql/apm/add_prt.sql:1377: WARNING:  relation "apm_test.incoming_set" does not have a policy class to update
+ apm_generic_incoming_set 
+--------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+        reloid         |    action     | disabled | check_func |      check_args      | act_func |       act_args       | version 
+-----------------------+---------------+----------+------------+----------------------+----------+----------------------+---------
+ apm_test.incoming_set | test_incoming |          |            | {"before": "3 days"} |          | {"period": "1 hour"} | 
+(1 row)
+
+-- should append 1 modify record to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |        relname        | class_id | class_name |    action     | operation | mod_field  |       old_val        |       new_val        
+----------+-----------------------+----------+------------+---------------+-----------+------------+----------------------+----------------------
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                      | {"before": "3 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                      | {"period": "8 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "8 hour"} | {"period": "1 hour"}
+(3 rows)
+
+-- should update check_args only
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'test_incoming', '{"before": "10 days"}');
+psql:sql/apm/add_prt.sql:1385: WARNING:  relation "apm_test.incoming_set" does not have a policy class to update
+ apm_generic_incoming_set 
+--------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+        reloid         |    action     | disabled | check_func |      check_args       | act_func |       act_args       | version 
+-----------------------+---------------+----------+------------+-----------------------+----------+----------------------+---------
+ apm_test.incoming_set | test_incoming |          |            | {"before": "10 days"} |          | {"period": "1 hour"} | 
+(1 row)
+
+-- should append 1 modify record to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |        relname        | class_id | class_name |    action     | operation | mod_field  |       old_val        |        new_val        
+----------+-----------------------+----------+------------+---------------+-----------+------------+----------------------+-----------------------
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                      | {"before": "3 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                      | {"period": "8 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "8 hour"} | {"period": "1 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "3 days"} | {"before": "10 days"}
+(4 rows)
+
+-- should update both
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'test_incoming', '{"before": "5 days", "period": "10 hour"}');
+psql:sql/apm/add_prt.sql:1393: WARNING:  relation "apm_test.incoming_set" does not have a policy class to update
+ apm_generic_incoming_set 
+--------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+        reloid         |    action     | disabled | check_func |      check_args      | act_func |       act_args        | version 
+-----------------------+---------------+----------+------------+----------------------+----------+-----------------------+---------
+ apm_test.incoming_set | test_incoming |          |            | {"before": "5 days"} |          | {"period": "10 hour"} | 
+(1 row)
+
+-- should append 2 modify records to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |        relname        | class_id | class_name |    action     | operation | mod_field  |        old_val        |        new_val        
+----------+-----------------------+----------+------------+---------------+-----------+------------+-----------------------+-----------------------
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "3 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "8 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "8 hour"}  | {"period": "1 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "3 days"}  | {"before": "10 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "10 days"} | {"before": "5 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "1 hour"}  | {"period": "10 hour"}
+(6 rows)
+
+-- should delete the entry
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'test_incoming', NULL);
+psql:sql/apm/add_prt.sql:1401: WARNING:  relation "apm_test.incoming_set" does not have a policy class to delete
+ apm_generic_incoming_set 
+--------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+ reloid | action | disabled | check_func | check_args | act_func | act_args | version 
+--------+--------+----------+------------+------------+----------+----------+---------
+(0 rows)
+
+-- should append 1 drop record to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |        relname        | class_id | class_name |    action     | operation | mod_field  |        old_val        |        new_val        
+----------+-----------------------+----------+------------+---------------+-----------+------------+-----------------------+-----------------------
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "3 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "8 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "8 hour"}  | {"period": "1 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "3 days"}  | {"before": "10 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "10 days"} | {"before": "5 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "1 hour"}  | {"period": "10 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | drop      |            |                       | 
+(7 rows)
+
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+-- should insert a new entry with only check_args
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'test_incoming', '{"before": "10 days"}');
+psql:sql/apm/add_prt.sql:1410: WARNING:  relation "apm_test.incoming_set" does not have a policy class to add
+ apm_generic_incoming_set 
+--------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+        reloid         |    action     | disabled | check_func |      check_args       | act_func | act_args | version 
+-----------------------+---------------+----------+------------+-----------------------+----------+----------+---------
+ apm_test.incoming_set | test_incoming |          |            | {"before": "10 days"} |          |          | 
+(1 row)
+
+-- should append 1 add record to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |        relname        | class_id | class_name |    action     | operation | mod_field  |        old_val        |        new_val        
+----------+-----------------------+----------+------------+---------------+-----------+------------+-----------------------+-----------------------
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "3 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "8 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "8 hour"}  | {"period": "1 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "3 days"}  | {"before": "10 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "10 days"} | {"before": "5 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "1 hour"}  | {"period": "10 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | drop      |            |                       | 
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "10 days"}
+(8 rows)
+
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+-- should insert a new entry with only act_args
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'test_incoming', '{"period": "1 hour"}');
+psql:sql/apm/add_prt.sql:1419: WARNING:  relation "apm_test.incoming_set" does not have a policy class to add
+ apm_generic_incoming_set 
+--------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+        reloid         |    action     | disabled | check_func | check_args | act_func |       act_args       | version 
+-----------------------+---------------+----------+------------+------------+----------+----------------------+---------
+ apm_test.incoming_set | test_incoming |          |            |            |          | {"period": "1 hour"} | 
+(1 row)
+
+-- should append 1 add record to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |        relname        | class_id | class_name |    action     | operation | mod_field  |        old_val        |        new_val        
+----------+-----------------------+----------+------------+---------------+-----------+------------+-----------------------+-----------------------
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "3 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "8 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "8 hour"}  | {"period": "1 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "3 days"}  | {"before": "10 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "10 days"} | {"before": "5 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "1 hour"}  | {"period": "10 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | drop      |            |                       | 
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "10 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "1 hour"}
+(9 rows)
+
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+-- should insert a new entry with only act_args
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'test_incoming', '{"storage_type": "heap"}');
+psql:sql/apm/add_prt.sql:1428: WARNING:  relation "apm_test.incoming_set" does not have a policy class to add
+ apm_generic_incoming_set 
+--------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+        reloid         |    action     | disabled | check_func | check_args | act_func |         act_args         | version 
+-----------------------+---------------+----------+------------+------------+----------+--------------------------+---------
+ apm_test.incoming_set | test_incoming |          |            |            |          | {"storage_type": "heap"} | 
+(1 row)
+
+-- should append 1 add record to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |        relname        | class_id | class_name |    action     | operation | mod_field  |        old_val        |         new_val          
+----------+-----------------------+----------+------------+---------------+-----------+------------+-----------------------+--------------------------
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "3 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "8 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "8 hour"}  | {"period": "1 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "3 days"}  | {"before": "10 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "10 days"} | {"before": "5 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "1 hour"}  | {"period": "10 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | drop      |            |                       | 
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "10 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "1 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"storage_type": "heap"}
+(10 rows)
+
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+-- should insert a new entry with only act_args
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'test_incoming', '{"period": "2h", "storage_type": "sortheap"}');
+psql:sql/apm/add_prt.sql:1437: WARNING:  relation "apm_test.incoming_set" does not have a policy class to add
+ apm_generic_incoming_set 
+--------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+        reloid         |    action     | disabled | check_func | check_args | act_func |                   act_args                   | version 
+-----------------------+---------------+----------+------------+------------+----------+----------------------------------------------+---------
+ apm_test.incoming_set | test_incoming |          |            |            |          | {"period": "2h", "storage_type": "sortheap"} | 
+(1 row)
+
+-- should append 1 add record to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |        relname        | class_id | class_name |    action     | operation | mod_field  |        old_val        |                   new_val                    
+----------+-----------------------+----------+------------+---------------+-----------+------------+-----------------------+----------------------------------------------
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "3 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "8 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "8 hour"}  | {"period": "1 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "3 days"}  | {"before": "10 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "10 days"} | {"before": "5 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "1 hour"}  | {"period": "10 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | drop      |            |                       | 
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "10 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "1 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"storage_type": "heap"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "2h", "storage_type": "sortheap"}
+(11 rows)
+
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+-- should insert a new entry with only act_args
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'test_incoming', '{"period": "4h", "before": "12 days", "storage_type": "ao_row"}');
+psql:sql/apm/add_prt.sql:1446: WARNING:  relation "apm_test.incoming_set" does not have a policy class to add
+ apm_generic_incoming_set 
+--------------------------
+ 
+(1 row)
+
+SELECT reloid::regclass, action, disabled, check_func, check_args, act_func, act_args, version
+FROM matrixts_internal.apm_rel_policy_action;
+        reloid         |    action     | disabled | check_func |      check_args       | act_func |                  act_args                  | version 
+-----------------------+---------------+----------+------------+-----------------------+----------+--------------------------------------------+---------
+ apm_test.incoming_set | test_incoming |          |            | {"before": "12 days"} |          | {"period": "4h", "storage_type": "ao_row"} | 
+(1 row)
+
+-- should append 2 add record to operation log
+SELECT username = CURRENT_USER, relname, class_id, class_name, action, operation, mod_field, old_val, new_val
+FROM matrixts_internal.apm_operation_log ORDER BY ts;
+ ?column? |        relname        | class_id | class_name |    action     | operation | mod_field  |        old_val        |                   new_val                    
+----------+-----------------------+----------+------------+---------------+-----------+------------+-----------------------+----------------------------------------------
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "3 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "8 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "8 hour"}  | {"period": "1 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "3 days"}  | {"before": "10 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | check_args | {"before": "10 days"} | {"before": "5 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | mod       | act_args   | {"period": "1 hour"}  | {"period": "10 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | drop      |            |                       | 
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "10 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "1 hour"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"storage_type": "heap"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "2h", "storage_type": "sortheap"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | check_args |                       | {"before": "12 days"}
+ t        | apm_test.incoming_set |          |            | test_incoming | add       | act_args   |                       | {"period": "4h", "storage_type": "ao_row"}
+(13 rows)
+
+-- should report error due to invalid storage type
+SELECT matrixts_internal.apm_generic_incoming_set('apm_test.incoming_set'::regclass, 1, 'test_incoming', '{"period": "4h", "before": "12 days", "storage_type": "blablabla"}');
+psql:sql/apm/add_prt.sql:1454: ERROR:  Invalid storage_type: blablabla.
+HINT:  Don't forget to CREATE EXTENSION for blablabla
+CONTEXT:  PL/pgSQL function matrixts_internal.apm_generic_incoming_set(regclass,integer,text,text) line 62 at RAISE
+--------------------------------
+-- test for customize am
+--------------------------------
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_tstz CASCADE;
+psql:sql/apm/add_prt.sql:1461: NOTICE:  table "by_tstz" does not exist, skipping
+CREATE TABLE apm_test.by_tstz(ts timestamp with time zone, region text)
+USING sortheap DISTRIBUTED BY (region)
+PARTITION BY RANGE (ts) (DEFAULT PARTITION hot);
+CREATE INDEX idx_sheap ON apm_test.by_tstz USING sortheap_btree(region, time_bucket('1 hour', ts));
+-- end_ignore
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2020-03-01'::timestamptz
+  , 'apm_test.by_tstz'::regclass
+  , NULL
+  , 'apm_test.by_tstz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+  , '{"period":"1 day"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2020-03-01'::timestamptz
+      , 'apm_test.by_tstz'::regclass
+      , NULL
+      , 'apm_test.by_tstz'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+      , '{"before":"3 days"}'::json
+    ))
+);
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should be sortheap for new partition
+SELECT amname FROM pg_class pc INNER JOIN pg_am pa ON pc.relam = pa.oid
+WHERE pc.relname LIKE 'by_tstz_%' AND relkind = 'r' AND relispartition;
+  amname  
+----------
+ sortheap
+ sortheap
+ sortheap
+ sortheap
+ sortheap
+(5 rows)
+
+ROLLBACK;
+-- default partition am != expected storage type
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_tstz CASCADE;
+psql:sql/apm/add_prt.sql:1497: NOTICE:  table "by_tstz" does not exist, skipping
+CREATE TABLE apm_test.by_tstz(ts timestamp with time zone, region text)
+PARTITION BY RANGE (ts) (DEFAULT PARTITION hot);
+psql:sql/apm/add_prt.sql:1499: NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'ts' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+-- end_ignore
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2020-03-01'::timestamptz
+  , 'apm_test.by_tstz'::regclass
+  , NULL
+  , 'apm_test.by_tstz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+  , '{"period":"1 day", "storage_type":"sortheap"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2020-03-01'::timestamptz
+      , 'apm_test.by_tstz'::regclass
+      , NULL
+      , 'apm_test.by_tstz'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+      , '{"before":"3 days"}'::json
+    ))
+);
+psql:sql/apm/add_prt.sql:1520: WARNING:  APM cannot create partition using 'sortheap', the default partition is 'heap'
+psql:sql/apm/add_prt.sql:1520: WARNING:  APM cannot create partition using 'sortheap', the default partition is 'heap'
+psql:sql/apm/add_prt.sql:1520: WARNING:  APM cannot create partition using 'sortheap', the default partition is 'heap'
+psql:sql/apm/add_prt.sql:1520: WARNING:  APM cannot create partition using 'sortheap', the default partition is 'heap'
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should be heap with WARNING for new partition
+SELECT amname FROM pg_class pc INNER JOIN pg_am pa ON pc.relam = pa.oid
+WHERE pc.relname LIKE 'by_tstz_%' AND relkind = 'r' AND relispartition;
+ amname 
+--------
+ heap
+ heap
+ heap
+ heap
+ heap
+(5 rows)
+
+ROLLBACK;
+-- default partition am != expected storage type
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_tstz CASCADE;
+psql:sql/apm/add_prt.sql:1531: NOTICE:  table "by_tstz" does not exist, skipping
+CREATE TABLE apm_test.by_tstz(ts timestamp with time zone, region text)
+PARTITION BY RANGE (ts);
+psql:sql/apm/add_prt.sql:1533: NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'ts' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+-- end_ignore
+-- invoke append partition
+SELECT matrixts_internal.apm_generic_append_partition(
+    '2020-03-01'::timestamptz
+  , 'apm_test.by_tstz'::regclass
+  , NULL
+  , 'apm_test.by_tstz'::regclass
+  , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+  , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+  , '{"period":"1 day", "storage_type":"ao_row"}'::json
+  , (SELECT matrixts_internal.apm_generic_incoming(
+        '2020-03-01'::timestamptz
+      , 'apm_test.by_tstz'::regclass
+      , NULL
+      , 'apm_test.by_tstz'::regclass
+      , (ARRAY(SELECT lp FROM matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL) lp WHERE reloid = root_reloid))[1]
+      , ARRAY(SELECT matrixts_internal.apm_generic_list_partitions('apm_test.by_tstz'::regclass, NULL))
+      , '{"before":"3 days"}'::json
+    ))
+);
+psql:sql/apm/add_prt.sql:1554: NOTICE:  table has parent, setting distribution columns to match parent table
+psql:sql/apm/add_prt.sql:1554: NOTICE:  table has parent, setting distribution columns to match parent table
+psql:sql/apm/add_prt.sql:1554: NOTICE:  table has parent, setting distribution columns to match parent table
+psql:sql/apm/add_prt.sql:1554: NOTICE:  table has parent, setting distribution columns to match parent table
+ apm_generic_append_partition 
+------------------------------
+ t
+(1 row)
+
+-- should be ao_row for new partitions
+SELECT amname FROM pg_class pc INNER JOIN pg_am pa ON pc.relam = pa.oid
+WHERE pc.relname LIKE 'by_tstz_%' AND relkind = 'r' AND relispartition;
+ amname 
+--------
+ ao_row
+ ao_row
+ ao_row
+ ao_row
+(4 rows)
+
+ROLLBACK;

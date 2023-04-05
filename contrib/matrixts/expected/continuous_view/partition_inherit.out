@@ -1,0 +1,487 @@
+-- start_ignore
+create extension if not exists matrixts;
+-- end_ignore
+-- test conf
+\set con_view_count 'cv_count'
+\set con_view_min 'cv_min'
+\set con_view_max 'cv_max'
+\set con_view_sum 'cv_sum'
+\set con_view_avg 'cv_avg'
+\set check_meta_data 'select srcname, viewname, toplevel from matrixts_internal.continuous_views;'
+\set check_count_con_view 'select ''count'', (select count(c1) from at_partitioned) = (select * from cv_count)'
+\set check_min_con_view 'select ''min'', (select min(c1) from at_partitioned) = (select * from cv_min)'
+\set check_max_con_view 'select ''max'', (select max(c1) from at_partitioned) = (select * from cv_max)'
+\set check_sum_con_view 'select ''sum'', (select sum(c1) from at_partitioned) = (select * from cv_sum)'
+\set check_avg_con_view 'select ''avg'', (select avg(c1) from at_partitioned) = (select * from cv_avg)'
+\set check_con_views ':check_count_con_view union all :check_min_con_view union all :check_max_con_view union all :check_sum_con_view union all :check_avg_con_view;'
+\set check_count_view_result 'select * from :con_view_count'
+\set check_min_view_result 'select * from :con_view_min'
+\set check_max_view_result 'select * from :con_view_max'
+\set check_sum_view_result 'select * from :con_view_sum'
+\set check_avg_view_result 'select * from :con_view_avg'
+\set check_view_result ':check_count_view_result union all :check_min_view_result union all :check_max_view_result union all :check_sum_view_result union all :check_avg_view_result;'
+--
+-- 1. Partition inherit continuous views with populate
+--
+CREATE TABLE at_partitioned (c1 int, c2 text)
+PARTITION BY RANGE(c1);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'c1' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+-- create partition
+CREATE TABLE at_part_1 (c1 int, c2 text);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'c1' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+ALTER TABLE at_partitioned ATTACH PARTITION at_part_1
+FOR VALUES FROM (0) to (10);
+-- create continuous view
+create view :con_view_count with (continuous) as select count(c1) from at_partitioned ;
+NOTICE:  merging column "internal_column_1" with inherited definition
+create view :con_view_min with (continuous) as select min(c1) from at_partitioned ;
+NOTICE:  merging column "internal_column_1" with inherited definition
+create view :con_view_max with (continuous) as select max(c1) from at_partitioned ;
+NOTICE:  merging column "internal_column_1" with inherited definition
+create view :con_view_sum with (continuous) as select sum(c1) from at_partitioned ;
+NOTICE:  merging column "internal_column_1" with inherited definition
+create view :con_view_avg with (continuous) as select avg(c1) from at_partitioned ;
+NOTICE:  merging column "internal_column_1" with inherited definition
+-- check meta data before insert data
+-- at_part_1 created before continuous views
+\d+ at_part_1
+                                 Table "public.at_part_1"
+ Column |  Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+---------+-----------+----------+---------+----------+--------------+-------------
+ c1     | integer |           |          |         | plain    |              | 
+ c2     | text    |           |          |         | extended |              | 
+Partition of: at_partitioned FOR VALUES FROM (0) TO (10)
+Partition constraint: ((c1 IS NOT NULL) AND (c1 >= 0) AND (c1 < 10))
+Triggers:
+    continuous_view_trigger BEFORE INSERT ON at_part_1 FOR EACH ROW EXECUTE FUNCTION matrixts_internal.continuous_view_insert_trigger()
+Distributed by: (c1)
+
+:check_meta_data
+     srcname      |   viewname    | toplevel 
+------------------+---------------+----------
+ con_view_drop_t1 | con_view_drop | t
+ at_partitioned   | cv_count      | t
+ at_part_1        | cv_count      | f
+ at_partitioned   | cv_min        | t
+ at_part_1        | cv_min        | f
+ at_partitioned   | cv_max        | t
+ at_part_1        | cv_max        | f
+ at_partitioned   | cv_sum        | t
+ at_part_1        | cv_sum        | f
+ at_partitioned   | cv_avg        | t
+ at_part_1        | cv_avg        | f
+(11 rows)
+
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | 
+ max      | 
+ sum      | 
+ avg      | 
+(5 rows)
+
+:check_view_result
+ count 
+-------
+     0
+      
+      
+      
+      
+(5 rows)
+
+-- insert to partition 1
+insert into at_partitioned select  0 + i % 5 , 'at_part_1_main' from generate_series(1, 50)i;
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | t
+ max      | t
+ sum      | t
+ avg      | t
+(5 rows)
+
+:check_view_result
+       count        
+--------------------
+                 50
+                  0
+                  4
+                100
+ 2.0000000000000000
+(5 rows)
+
+insert into at_partitioned select 0 + i % 10, 'at_part_1_main' from generate_series(1, 50)i;
+-- Create partition
+--
+-- 1. Alter {Main} Attach PARTITION {Sub}
+--
+create table at_part_2 (c1 int, c2 text);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'c1' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+-- insert data before attach partition
+insert into at_part_2 select 10 + i % 10, 'at_part_2_sub' from generate_series(1, 50)i;
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | t
+ max      | t
+ sum      | t
+ avg      | t
+(5 rows)
+
+:check_view_result
+       count        
+--------------------
+                100
+                  0
+                  9
+                325
+ 3.2500000000000000
+(5 rows)
+
+-- attach partition
+alter table at_partitioned attach partition at_part_2 for values from (10) to (20);
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+-- auto inherit
+:check_meta_data
+     srcname      |   viewname    | toplevel 
+------------------+---------------+----------
+ con_view_drop_t1 | con_view_drop | t
+ at_partitioned   | cv_count      | t
+ at_part_1        | cv_count      | f
+ at_partitioned   | cv_min        | t
+ at_part_1        | cv_min        | f
+ at_partitioned   | cv_max        | t
+ at_part_1        | cv_max        | f
+ at_partitioned   | cv_sum        | t
+ at_part_1        | cv_sum        | f
+ at_partitioned   | cv_avg        | t
+ at_part_1        | cv_avg        | f
+ at_part_2        | cv_count      | f
+ at_part_2        | cv_min        | f
+ at_part_2        | cv_max        | f
+ at_part_2        | cv_sum        | f
+ at_part_2        | cv_avg        | f
+(16 rows)
+
+-- auto populate
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | t
+ max      | t
+ sum      | t
+ avg      | t
+(5 rows)
+
+:check_view_result
+       count        
+--------------------
+                150
+                  0
+                 19
+               1050
+ 7.0000000000000000
+(5 rows)
+
+-- insert data into main table
+insert into at_partitioned select 10 + i % 5, 'at_part_2_main' from generate_series(1, 50)i;
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | t
+ max      | t
+ sum      | t
+ avg      | t
+(5 rows)
+
+:check_view_result
+       count        
+--------------------
+                200
+                  0
+                 19
+               1650
+ 8.2500000000000000
+(5 rows)
+
+-- insert data into sub table
+insert into at_part_2 select 10 + i % 8, 'at_part_2_sub' from generate_series(1, 50)i;
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | t
+ max      | t
+ sum      | t
+ avg      | t
+(5 rows)
+
+:check_view_result
+       count        
+--------------------
+                250
+                  0
+                 19
+               2321
+ 9.2840000000000000
+(5 rows)
+
+--
+-- 2. ALTER {Main} ADD {Sub} FOR VALUES START {} END {};
+--
+create table at_part_3 (c1 int, c2 text);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'c1' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+-- insert data before add partition
+insert into at_part_3 select 20 + i % 10, 'at_part_3_sub' from generate_series(1, 50)i;
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | t
+ max      | t
+ sum      | t
+ avg      | t
+(5 rows)
+
+:check_view_result
+       count        
+--------------------
+                250
+                  0
+                 19
+               2321
+ 9.2840000000000000
+(5 rows)
+
+-- add partition
+alter table at_partitioned add partition at_part_3 start (20) end (30);
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+-- add partition will create a new partition table that not inherit data from raw table.
+-- auto inherit
+:check_meta_data
+            srcname             |   viewname    | toplevel 
+--------------------------------+---------------+----------
+ con_view_drop_t1               | con_view_drop | t
+ at_partitioned                 | cv_count      | t
+ at_part_1                      | cv_count      | f
+ at_partitioned                 | cv_min        | t
+ at_part_1                      | cv_min        | f
+ at_partitioned                 | cv_max        | t
+ at_part_1                      | cv_max        | f
+ at_partitioned                 | cv_sum        | t
+ at_part_1                      | cv_sum        | f
+ at_partitioned                 | cv_avg        | t
+ at_part_1                      | cv_avg        | f
+ at_part_2                      | cv_count      | f
+ at_part_2                      | cv_min        | f
+ at_part_2                      | cv_max        | f
+ at_part_2                      | cv_sum        | f
+ at_part_2                      | cv_avg        | f
+ at_partitioned_1_prt_at_part_3 | cv_count      | f
+ at_partitioned_1_prt_at_part_3 | cv_min        | f
+ at_partitioned_1_prt_at_part_3 | cv_max        | f
+ at_partitioned_1_prt_at_part_3 | cv_sum        | f
+ at_partitioned_1_prt_at_part_3 | cv_avg        | f
+(21 rows)
+
+-- auto populate
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | t
+ max      | t
+ sum      | t
+ avg      | t
+(5 rows)
+
+:check_view_result
+       count        
+--------------------
+                250
+                  0
+                 19
+               2321
+ 9.2840000000000000
+(5 rows)
+
+-- insert data into main table
+insert into at_partitioned select 20 + i % 5, 'at_part_3_main' from generate_series(1, 50)i;
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | t
+ max      | t
+ sum      | t
+ avg      | t
+(5 rows)
+
+:check_view_result
+        count        
+---------------------
+                 300
+                   0
+                  24
+                3421
+ 11.4033333333333333
+(5 rows)
+
+insert into at_partitioned_1_prt_at_part_3 select 20 + i % 8, 'at_part_3_sub' from generate_series(1, 50)i;
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | t
+ max      | t
+ sum      | t
+ avg      | t
+(5 rows)
+
+:check_view_result
+        count        
+---------------------
+                 350
+                   0
+                  27
+                4592
+ 13.1200000000000000
+(5 rows)
+
+--
+-- 3. CREATE {Sub} PARTITION OF {Main}
+--
+create table at_part_4 partition of at_partitioned for values from (30) to (40);
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+:check_meta_data
+            srcname             |   viewname    | toplevel 
+--------------------------------+---------------+----------
+ con_view_drop_t1               | con_view_drop | t
+ at_partitioned                 | cv_count      | t
+ at_part_1                      | cv_count      | f
+ at_partitioned                 | cv_min        | t
+ at_part_1                      | cv_min        | f
+ at_partitioned                 | cv_max        | t
+ at_part_1                      | cv_max        | f
+ at_partitioned                 | cv_sum        | t
+ at_part_1                      | cv_sum        | f
+ at_partitioned                 | cv_avg        | t
+ at_part_1                      | cv_avg        | f
+ at_part_2                      | cv_count      | f
+ at_part_2                      | cv_min        | f
+ at_part_2                      | cv_max        | f
+ at_part_2                      | cv_sum        | f
+ at_part_2                      | cv_avg        | f
+ at_partitioned_1_prt_at_part_3 | cv_count      | f
+ at_partitioned_1_prt_at_part_3 | cv_min        | f
+ at_partitioned_1_prt_at_part_3 | cv_max        | f
+ at_partitioned_1_prt_at_part_3 | cv_sum        | f
+ at_partitioned_1_prt_at_part_3 | cv_avg        | f
+ at_part_4                      | cv_count      | f
+ at_part_4                      | cv_min        | f
+ at_part_4                      | cv_max        | f
+ at_part_4                      | cv_sum        | f
+ at_part_4                      | cv_avg        | f
+(26 rows)
+
+-- insert data into main table
+insert into at_partitioned select 30 + i % 5, 'at_part_4_main' from generate_series(1, 50)i;
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | t
+ max      | t
+ sum      | t
+ avg      | t
+(5 rows)
+
+:check_view_result
+        count        
+---------------------
+                 400
+                   0
+                  34
+                6192
+ 15.4800000000000000
+(5 rows)
+
+-- insert data into sub table
+insert into at_part_4 select 30 + i % 10, 'at_part_4_sub' from generate_series(1, 50)i;
+:check_con_views
+ ?column? | ?column? 
+----------+----------
+ count    | t
+ min      | t
+ max      | t
+ sum      | t
+ avg      | t
+(5 rows)
+
+:check_view_result
+        count        
+---------------------
+                 450
+                   0
+                  39
+                7917
+ 17.5933333333333333
+(5 rows)
+
+-- should error,
+drop table at_partitioned;
+ERROR:  cannot drop table at_partitioned because other objects depend on it
+DETAIL:  view cv_count depends on table at_partitioned
+view cv_min depends on table at_partitioned
+view cv_max depends on table at_partitioned
+view cv_sum depends on table at_partitioned
+view cv_avg depends on table at_partitioned
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+-- succeed to drop
+drop table at_partitioned CASCADE;
+NOTICE:  drop cascades to 5 other objects
+DETAIL:  drop cascades to view cv_count
+drop cascades to view cv_min
+drop cascades to view cv_max
+drop cascades to view cv_sum
+drop cascades to view cv_avg
+-- should fail, drop partition main table, sub tables should not exist.
+-- no table left means they are a partition group.
+\d+ at_part_1
+\d+ at_part_2
+-- at_part_3 is not sub partition
+\d+ at_part_3
+                                 Table "public.at_part_3"
+ Column |  Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+---------+-----------+----------+---------+----------+--------------+-------------
+ c1     | integer |           |          |         | plain    |              | 
+ c2     | text    |           |          |         | extended |              | 
+Distributed by: (c1)
+
+\d+ at_partitioned_1_prt_at_part_3
+\d+ at_part_4
+drop table at_part_3;

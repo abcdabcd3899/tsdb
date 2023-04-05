@@ -1,0 +1,34 @@
+-- @Description Tests that vacuum is not changing the modification count.
+--
+DROP TABLE IF EXISTS ao;
+DROP
+CREATE TABLE ao (a INT, b INT) USING @amname@;
+CREATE
+INSERT INTO ao SELECT i as a, i as b FROM generate_series(1,10) AS i;
+INSERT 10
+
+DELETE FROM ao WHERE a < 5;
+DELETE 4
+SELECT state, tupcount, modcount FROM gp_ao_or_aocs_seg('ao');
+ state | tupcount | modcount 
+-------+----------+----------
+ 1     | 1        | 2        
+ 1     | 4        | 1        
+ 1     | 5        | 2        
+(3 rows)
+VACUUM ao;
+VACUUM
+SELECT state, modcount FROM gp_ao_or_aocs_seg('ao');
+ state | modcount 
+-------+----------
+ 1     | 1        
+ 1     | 1        
+ 1     | 1        
+ 1     | 2        
+ 1     | 2        
+(5 rows)
+SELECT sum(tupcount) FROM gp_ao_or_aocs_seg('ao');
+ sum 
+-----
+ 6   
+(1 row)

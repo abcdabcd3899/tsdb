@@ -1,0 +1,319 @@
+--
+-- EQ
+--
+
+-- match
+:explain
+select * from :tname where c1 = 24680;
+select * from :tname where c1 = 24680;
+
+-- mismatch: hole
+:explain
+select * from :tname where c1 = 13570;
+select * from :tname where c1 = 13570;
+
+-- mismatch: < min
+:explain
+select * from :tname where c1 = -1;
+select * from :tname where c1 = -1;
+
+-- mismatch: > max
+:explain
+select * from :tname where c1 = 10000000;
+select * from :tname where c1 = 10000000;
+
+-- exact match
+:explain
+select * from :tname where c1 = 24680 and c2 = 24685;
+select * from :tname where c1 = 24680 and c2 = 24685;
+
+-- mismatch on c2, as index cond or filter
+:explain
+select * from :tname where c1 = 24680 and c2 = 13579;
+select * from :tname where c1 = 24680 and c2 = 13579;
+
+--
+-- LT
+--
+
+-- match on edge
+:explain
+select * from :tname where c1 < 40;
+select * from :tname where c1 < 40;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 < 40 and c2 < 5;
+select * from :tname where c1 < 40 and c2 < 5;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 < 40 and c2 < 25;
+select * from :tname where c1 < 40 and c2 < 25;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 < 40 and c2 = 25;
+select * from :tname where c1 < 40 and c2 = 25;
+
+-- match in the middle
+:explain
+select * from :tname where c1 = 24680 and c2 < 24685;
+select * from :tname where c1 = 24680 and c2 < 24685;
+
+-- mismatch
+:explain
+select * from :tname where c1 = 24680 and c2 < 24680;
+select * from :tname where c1 = 24680 and c2 < 24680;
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 = 24680 and c1 < 2468;
+select * from :tname where c1 = 24680 and c1 < 2468;
+
+-- match, with useless range
+:explain
+select * from :tname where c1 = 24680 and c1 < 2468000;
+select * from :tname where c1 = 24680 and c1 < 2468000;
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c2 < 2468000;
+select * from :tname where c1 = 24680 and c2 < 2468000;
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 < 40 and c1 < 10000000;
+select * from :tname where c1 < 40 and c1 < 10000000;
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 < 10000000 and c1 < 40;
+select * from :tname where c1 < 10000000 and c1 < 40;
+
+--
+-- LE
+--
+
+-- match on edge
+:explain
+select * from :tname where c1 <= 20;
+select * from :tname where c1 <= 20;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 <= 20 and c2 <= 5;
+select * from :tname where c1 <= 20 and c2 <= 5;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 <= 20 and c2 <= 25;
+select * from :tname where c1 <= 20 and c2 <= 25;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 <= 20 and c2 = 25;
+select * from :tname where c1 <= 20 and c2 = 25;
+
+-- match in the middle
+:explain
+select * from :tname where c1 = 24680 and c2 <= 24685;
+select * from :tname where c1 = 24680 and c2 <= 24685;
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c2 <= 24680;
+select * from :tname where c1 = 24680 and c2 <= 24680;
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 = 24680 and c1 <= 2468;
+select * from :tname where c1 = 24680 and c1 <= 2468;
+
+-- match, with useless range
+:explain
+select * from :tname where c1 = 24680 and c1 <= 2468000;
+select * from :tname where c1 = 24680 and c1 <= 2468000;
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c2 <= 2468000;
+select * from :tname where c1 = 24680 and c2 <= 2468000;
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 <= 20 and c1 <= 10000000;
+select * from :tname where c1 <= 20 and c1 <= 10000000;
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 <= 10000000 and c1 <= 20;
+select * from :tname where c1 <= 10000000 and c1 <= 20;
+
+--
+-- GT
+--
+
+-- match on edge
+:explain
+select * from :tname where c1 > 199940;
+select * from :tname where c1 > 199940;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 > 199940 and c2 > 199985;
+select * from :tname where c1 > 199940 and c2 > 199985;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 > 199940 and c2 > 199945;
+select * from :tname where c1 > 199940 and c2 > 199945;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 > 199940 and c2 = 199965;
+select * from :tname where c1 > 199940 and c2 = 199965;
+
+-- match in the middle
+:explain
+select * from :tname where c1 = 24680 and c2 > 24685;
+select * from :tname where c1 = 24680 and c2 > 24685;
+
+-- mismatch
+:explain
+select * from :tname where c1 = 24680 and c2 > 24689;
+select * from :tname where c1 = 24680 and c2 > 24689;
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 = 24680 and c1 > 50000;
+select * from :tname where c1 = 24680 and c1 > 50000;
+
+-- match, with useless range
+:explain
+select * from :tname where c1 = 24680 and c1 > 2000;
+select * from :tname where c1 = 24680 and c1 > 2000;
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c2 > 2000;
+select * from :tname where c1 = 24680 and c2 > 2000;
+
+-- match a range
+:explain
+select * from :tname where c1 > 50000 and c1 < 50040;
+select * from :tname where c1 > 50000 and c1 < 50040;
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 > 199940 and c1 > 0;
+select * from :tname where c1 > 199940 and c1 > 0;
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 > 0 and c1 > 199940;
+select * from :tname where c1 > 0 and c1 > 199940;
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 > 50000 and c1 < 40000;
+select * from :tname where c1 > 50000 and c1 < 40000;
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 < 40000 and c1 > 50000;
+select * from :tname where c1 < 40000 and c1 > 50000;
+
+-- GE
+
+-- match on edge
+:explain
+select * from :tname where c1 >= 199960;
+select * from :tname where c1 >= 199960;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 >= 199960 and c2 >= 199985;
+select * from :tname where c1 >= 199960 and c2 >= 199985;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 >= 199960 and c2 >= 199945;
+select * from :tname where c1 >= 199960 and c2 >= 199945;
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 >= 199960 and c2 = 199965;
+select * from :tname where c1 >= 199960 and c2 = 199965;
+
+-- match in the middle
+:explain
+select * from :tname where c1 = 24680 and c2 >= 24685;
+select * from :tname where c1 = 24680 and c2 >= 24685;
+
+-- mismatch
+:explain
+select * from :tname where c1 = 24680 and c2 >= 24690;
+select * from :tname where c1 = 24680 and c2 >= 24690;
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c1 >= 24680;
+select * from :tname where c1 = 24680 and c1 >= 24680;
+
+-- match, with useless range
+:explain
+select * from :tname where c1 = 24680 and c1 >= 2000;
+select * from :tname where c1 = 24680 and c1 >= 2000;
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c2 >= 2000;
+select * from :tname where c1 = 24680 and c2 >= 2000;
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 >= 199960 and c1 >= 0;
+select * from :tname where c1 >= 199960 and c1 >= 0;
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 >= 0 and c1 >= 199960;
+select * from :tname where c1 >= 0 and c1 >= 199960;
+
+-- match a range
+:explain
+select * from :tname where c1 >= 50000 and c1 <= 50020;
+select * from :tname where c1 >= 50000 and c1 <= 50020;
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 >= 50000 and c1 <= 40000;
+select * from :tname where c1 >= 50000 and c1 <= 40000;
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 <= 40000 and c1 >= 50000;
+select * from :tname where c1 <= 40000 and c1 >= 50000;
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 >= 50000 and c1 < 50000;
+select * from :tname where c1 >= 50000 and c1 < 50000;
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 > 50000 and c1 <= 50000;
+select * from :tname where c1 > 50000 and c1 <= 50000;
+
+-- NE
+
+-- match
+:explain
+select * from :tname where c1 <> 50010 and c1 > 50000 and c1 < 50040;
+select * from :tname where c1 <> 50010 and c1 > 50000 and c1 < 50040;
+
+-- match
+:explain
+select * from :tname where c1 > 50000 and c1 < 50040 and c2 <> 50025;
+select * from :tname where c1 > 50000 and c1 < 50040 and c2 <> 50025;

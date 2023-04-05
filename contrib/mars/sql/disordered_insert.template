@@ -1,0 +1,153 @@
+create table :tname
+     ( c1 int
+     , c2 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+
+-- the first batch
+insert into :tname
+select i / 2 * 100 + 300 as c1
+     , i % 2 * 100 + 300 as c2
+  from generate_series(0, 3) i
+;
+
+-- verify the blocks
+select ctid, c1, c2 from :tname;
+
+--
+-- 1. insert after existing blocks, no block merging is triggered.
+--
+
+begin;
+    -- 1.1. one row
+    insert into :tname values ( 500, 500 );
+    select ctid, c1, c2 from :tname;
+abort;
+
+begin;
+    -- 1.2. multiple rows, maybe in different groups
+    insert into :tname values ( 500, 500 ), ( 520, 520 );
+    select ctid, c1, c2 from :tname;
+abort;
+
+begin;
+    -- 1.3. multiple rows, maybe in the same group
+    insert into :tname values ( 500, 500 ), ( 501, 501 );
+    select ctid, c1, c2 from :tname;
+abort;
+
+begin;
+    -- 1.4. multiple rows, maybe in the same group, wrong order
+    insert into :tname values ( 501, 501 ), ( 500, 500 );
+    select ctid, c1, c2 from :tname;
+abort;
+
+begin;
+    -- 1.5. multiple inserts
+    insert into :tname values ( 601, 601 ), ( 600, 600 );
+    insert into :tname values ( 500, 500 ), ( 501, 501 );
+    select ctid, c1, c2 from :tname;
+abort;
+
+--
+-- 2. insert before existing blocks, no block merging is triggered.
+--
+
+begin;
+    -- 2.1. one row
+    insert into :tname values ( 100, 100 );
+    select ctid, c1, c2 from :tname;
+abort;
+
+begin;
+    -- 2.2. multiple rows, maybe in different groups
+    insert into :tname values ( 100, 100 ), ( 120, 120 );
+    select ctid, c1, c2 from :tname;
+abort;
+
+begin;
+    -- 2.3. multiple rows, maybe in the same group
+    insert into :tname values ( 100, 100 ), ( 101, 101 );
+    select ctid, c1, c2 from :tname;
+abort;
+
+begin;
+    -- 2.4. multiple rows, maybe in the same group, wrong order
+    insert into :tname values ( 101, 101 ), ( 100, 100 );
+    select ctid, c1, c2 from :tname;
+abort;
+
+begin;
+    -- 2.5. multiple inserts
+    insert into :tname values ( 201, 201 ), ( 200, 200 );
+    insert into :tname values ( 100, 100 ), ( 101, 101 );
+    select ctid, c1, c2 from :tname;
+abort;
+
+--
+-- 3. overlaps with existing blocks, block merging is triggered.
+--
+
+begin;
+    -- 3.1. one row
+    insert into :tname values ( 300, 300 );
+    select ctid from :tname;
+    select c1, c2 from :tname order by c1, c2;
+abort;
+
+begin;
+    -- 3.2. multiple rows, maybe in different groups
+    insert into :tname values ( 300, 300 ), ( 320, 320 );
+    select ctid from :tname;
+    select c1, c2 from :tname order by c1, c2;
+abort;
+
+begin;
+    -- 3.3. multiple rows, maybe in the same group
+    insert into :tname values ( 300, 300 ), ( 301, 301 );
+    select ctid from :tname;
+    select c1, c2 from :tname order by c1, c2;
+abort;
+
+begin;
+    -- 3.4. multiple rows, maybe in the same group, wrong order
+    insert into :tname values ( 301, 301 ), ( 300, 300 );
+    select ctid from :tname;
+    select c1, c2 from :tname order by c1, c2;
+abort;
+
+begin;
+    -- 3.5. multiple inserts
+    insert into :tname values ( 401, 401 ), ( 400, 400 );
+    insert into :tname values ( 300, 300 ), ( 301, 301 );
+    select ctid from :tname;
+    select c1, c2 from :tname order by c1, c2;
+abort;
+
+--
+-- 4. other tests
+--
+
+begin;
+    -- 4.1. overlaps with multiple existing blocks
+    insert into :tname values ( 300, 300 ), ( 301, 301 )
+                            , ( 501, 501 ), ( 500, 500 )
+                            , ( 401, 401 ), ( 400, 400 );
+    select ctid from :tname;
+    select c1, c2 from :tname order by c1, c2;
+abort;
+
+begin;
+    -- 4.2. merge multiple times
+    insert into :tname values ( 300, 300 ), ( 301, 301 )
+                            , ( 501, 501 ), ( 500, 500 )
+                            , ( 303, 303 ), ( 302, 302 );
+    select ctid from :tname;
+    select c1, c2 from :tname order by c1, c2;
+abort;
+
+-- vi: syntax=sql et :

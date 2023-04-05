@@ -1,0 +1,50 @@
+fe-secure-openssl.o: fe-secure-openssl.c ../../../src/include/c.h \
+ ../../../src/include/postgres_ext.h ../../../src/include/pg_config_ext.h \
+ ../../../src/include/pg_config.h ../../../src/include/pg_config_manual.h \
+ ../../../src/include/pg_config_os.h ../../../src/include/port.h \
+ ../../../src/interfaces/libpq/libpq-fe.h \
+ ../../../src/include/postgres_ext.h \
+ ../../../src/interfaces/libpq/fe-auth.h \
+ ../../../src/interfaces/libpq/libpq-fe.h \
+ ../../../src/interfaces/libpq/libpq-int.h \
+ ../../../src/interfaces/libpq/libpq-events.h \
+ ../../../src/include/getaddrinfo.h ../../../src/include/libpq/pqcomm.h \
+ ../../../src/interfaces/libpq/pqexpbuffer.h \
+ ../../../src/interfaces/libpq/fe-secure-common.h \
+ ../../../src/interfaces/libpq/libpq-int.h
+
+../../../src/include/c.h:
+
+../../../src/include/postgres_ext.h:
+
+../../../src/include/pg_config_ext.h:
+
+../../../src/include/pg_config.h:
+
+../../../src/include/pg_config_manual.h:
+
+../../../src/include/pg_config_os.h:
+
+../../../src/include/port.h:
+
+../../../src/interfaces/libpq/libpq-fe.h:
+
+../../../src/include/postgres_ext.h:
+
+../../../src/interfaces/libpq/fe-auth.h:
+
+../../../src/interfaces/libpq/libpq-fe.h:
+
+../../../src/interfaces/libpq/libpq-int.h:
+
+../../../src/interfaces/libpq/libpq-events.h:
+
+../../../src/include/getaddrinfo.h:
+
+../../../src/include/libpq/pqcomm.h:
+
+../../../src/interfaces/libpq/pqexpbuffer.h:
+
+../../../src/interfaces/libpq/fe-secure-common.h:
+
+../../../src/interfaces/libpq/libpq-int.h:

@@ -1,0 +1,468 @@
+-- start_ignore
+create extension if not exists mars;
+-- end_ignore
+--
+-- pushdown of count() aggs.
+--
+\set tname test_mars_customscan_count_t1
+\set tmpname test_mars_customscan_count_t2
+drop table if exists :tname;
+-- we dispatch by batch, so the tuples of the same batch are on the same seg,
+-- this is important to ensure the per-block count.
+create table :tname (batch int, c1 int, id serial)
+	using mars
+	with (group_col_ = "{batch}", group_param_col_ = '{id in 1000}')
+	distributed by (batch);
+-- count on empty tables should return nothing.
+select batch
+     , count() as full_count
+     , count(c1) as column_count
+  from :tname
+ group by batch;
+ batch | full_count | column_count 
+-------+------------+--------------
+(0 rows)
+
+insert into :tname values
+-- one single non-null value
+\set batch 0
+  (:batch, 1)
+-- one single null value
+\set batch 10
+, (:batch, null)
+-- multiple non-null values
+\set batch 20
+, (:batch, 1)
+, (:batch, 2)
+, (:batch, 3)
+-- multiple null values
+\set batch 30
+, (:batch, null)
+, (:batch, null)
+, (:batch, null)
+-- mix of non-null and null values
+\set batch 40
+, (:batch, 1)
+, (:batch, null)
+, (:batch, 2)
+, (:batch, null)
+, (:batch, 3)
+, (:batch, null)
+-- end of the insert
+;
+-- first let's do them via the content scan of the custom scan.
+select batch
+     , count() as full_count
+     , count(c1) as column_count
+  from :tname
+ group by batch;
+ batch | full_count | column_count 
+-------+------------+--------------
+     0 |          1 |            1
+    10 |          1 |            0
+    20 |          3 |            3
+    30 |          3 |            0
+    40 |          6 |            3
+(5 rows)
+
+-- then let's do them with the block scan of the custom scan, we need to insert
+-- each batch separately.
+create temp table :tmpname (like :tname) distributed by (batch);
+insert into :tmpname select * from :tname order by batch;
+truncate :tname;
+do language plpgsql $$
+    declare
+        batch_ int;
+    begin
+        for batch_ in select distinct batch
+                        from test_mars_customscan_count_t2
+                       order by 1
+        loop
+            insert into test_mars_customscan_count_t1
+                 select *
+                   from test_mars_customscan_count_t2
+                  where batch = batch_;
+        end loop;
+    end;
+$$;
+select batch
+     , count() as full_count
+     , count(c1) as column_count
+  from :tname
+ group by batch;
+ batch | full_count | column_count 
+-------+------------+--------------
+     0 |          1 |            1
+    10 |          1 |            0
+    20 |          3 |            3
+    30 |          3 |            0
+    40 |          6 |            3
+(5 rows)
+
+--
+-- pushdown of count(1) aggs.
+--
+\set tname test_mars_customscan_count_1_t
+-- start_ignore
+drop table if exists :tname;
+NOTICE:  table "test_mars_customscan_count_1_t" does not exist, skipping
+-- end_ignore
+create table :tname (tag_id int, time timestamp, read int)
+	using mars
+	with (tagkey='tag_id', timekey='time', timebucket='5 mins')
+	distributed by (tag_id);
+insert into :tname values (1,'2020-01-01 12:00:00',1),
+(1,'2020-01-01 12:01:00',1),
+(1,'2020-01-01 12:02:00',1),
+(1,'2020-01-01 12:03:00',null),
+(1,'2020-01-01 12:04:00',1),
+(1,'2020-01-01 12:05:00',1),
+(1,'2020-01-01 12:06:00',null),
+(1,'2020-01-01 12:07:00',1),
+(1,'2020-01-01 12:08:00',1),
+(1,'2020-01-01 12:09:00',null),
+(1,'2020-01-01 12:10:00',1);
+explain (costs off) select count() from :tname;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select count() from :tname;
+ count 
+-------
+    11
+(1 row)
+
+explain (costs off) select count(*) from :tname;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select count(*) from :tname;
+ count 
+-------
+    11
+(1 row)
+
+explain (costs off) select count(1) from :tname;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select count(1) from :tname;
+ count 
+-------
+    11
+(1 row)
+
+explain (costs off) select count(2) from :tname;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select count(2) from :tname;
+ count 
+-------
+    11
+(1 row)
+
+explain (costs off) select count(read) from :tname;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select count(read) from :tname;
+ count 
+-------
+     8
+(1 row)
+
+explain (costs off) select count(null) from :tname;
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Partial Aggregate
+               ->  Seq Scan on test_mars_customscan_count_1_t
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select count(null) from :tname;
+ count 
+-------
+     0
+(1 row)
+
+explain (costs off) select count() from :tname where time <= '2020-01-01 12:07:00';
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select count() from :tname where time <= '2020-01-01 12:07:00';
+ count 
+-------
+     8
+(1 row)
+
+explain (costs off) select count(*) from :tname where time <= '2020-01-01 12:07:00';
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select count(*) from :tname where time <= '2020-01-01 12:07:00';
+ count 
+-------
+     8
+(1 row)
+
+explain (costs off) select count(1) from :tname where time <= '2020-01-01 12:07:00';
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select count(1) from :tname where time <= '2020-01-01 12:07:00';
+ count 
+-------
+     8
+(1 row)
+
+explain (costs off) select count(2) from :tname where time <= '2020-01-01 12:07:00';
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select count(2) from :tname where time <= '2020-01-01 12:07:00';
+ count 
+-------
+     8
+(1 row)
+
+explain (costs off) select count(read) from :tname where time <= '2020-01-01 12:07:00';
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select count(read) from :tname where time <= '2020-01-01 12:07:00';
+ count 
+-------
+     6
+(1 row)
+
+explain (costs off) select count(null) from :tname where time <= '2020-01-01 12:07:00';
+                                           QUERY PLAN                                            
+-------------------------------------------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice1; segments: 3)
+         ->  Partial Aggregate
+               ->  Custom Scan (MarsSortScan) on test_mars_customscan_count_1_t
+                     Filter: ("time" <= 'Wed Jan 01 12:07:00 2020'::timestamp without time zone)
+ Optimizer: Postgres query optimizer
+(6 rows)
+
+select count(null) from :tname where time <= '2020-01-01 12:07:00';
+ count 
+-------
+     0
+(1 row)
+
+explain (costs off) select count(distinct read) from :tname group by tag_id;
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   ->  GroupAggregate
+         Group Key: tag_id
+         ->  Custom Scan (MarsSortScan) on test_mars_customscan_count_1_t
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select count(distinct read) from :tname group by tag_id;
+ count 
+-------
+     1
+(1 row)
+
+explain (costs off) select count(distinct 2) from :tname group by tag_id;
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   ->  GroupAggregate
+         Group Key: tag_id
+         ->  Custom Scan (MarsSortScan) on test_mars_customscan_count_1_t
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select count(distinct 2) from :tname group by tag_id;
+ count 
+-------
+     1
+(1 row)
+
+explain (costs off) select count(read) filter (where tag_id = 2) from :tname group by tag_id;
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   ->  GroupAggregate
+         Group Key: tag_id
+         ->  Custom Scan (MarsSortScan) on test_mars_customscan_count_1_t
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select count(read) filter (where tag_id = 2) from :tname group by tag_id;
+ count 
+-------
+     0
+(1 row)
+
+explain (costs off) select count(read order by time) from :tname group by tag_id;
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   ->  GroupAggregate
+         Group Key: tag_id
+         ->  Custom Scan (MarsSortScan) on test_mars_customscan_count_1_t
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select count(read order by time) from :tname group by tag_id;
+ count 
+-------
+     8
+(1 row)
+
+select count() from :tname where tag_id = 1;
+ count 
+-------
+    11
+(1 row)
+
+select count(*) from :tname where tag_id = 1;
+ count 
+-------
+    11
+(1 row)
+
+select count(1) from :tname where tag_id = 1;
+ count 
+-------
+    11
+(1 row)
+
+select count(2) from :tname where tag_id = 1;
+ count 
+-------
+    11
+(1 row)
+
+select count(read) from :tname where tag_id = 1;
+ count 
+-------
+     8
+(1 row)
+
+select count(null) from :tname where tag_id = 1;
+ count 
+-------
+     0
+(1 row)
+
+select count() from :tname where tag_id = 1 and time <= '2020-01-01 12:07:00';
+ count 
+-------
+     8
+(1 row)
+
+select count(*) from :tname where tag_id = 1 and time <= '2020-01-01 12:07:00';
+ count 
+-------
+     8
+(1 row)
+
+select count(1) from :tname where tag_id = 1 and time <= '2020-01-01 12:07:00';
+ count 
+-------
+     8
+(1 row)
+
+select count(2) from :tname where tag_id = 1 and time <= '2020-01-01 12:07:00';
+ count 
+-------
+     8
+(1 row)
+
+select count(read) from :tname where tag_id = 1 and time <= '2020-01-01 12:07:00';
+ count 
+-------
+     6
+(1 row)
+
+select count(null) from :tname where tag_id = 1 and time <= '2020-01-01 12:07:00';
+ count 
+-------
+     0
+(1 row)
+
+select count(distinct read) from :tname where tag_id = 1;
+ count 
+-------
+     1
+(1 row)
+
+select count(distinct 2) from :tname where tag_id = 1;
+ count 
+-------
+     1
+(1 row)
+
+select count(read) filter (where tag_id = 2) from :tname where tag_id = 1;
+ count 
+-------
+     0
+(1 row)
+
+select count(read order by time) from :tname where tag_id = 1;
+ count 
+-------
+     8
+(1 row)
+
+drop table :tname;

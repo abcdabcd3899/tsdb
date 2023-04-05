@@ -1,0 +1,1 @@
+src/backend/utils/gdd/gddfuncs.o src/backend/utils/gdd/gddbackend.o src/backend/utils/gdd/gdddetector.o

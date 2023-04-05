@@ -1,0 +1,995 @@
+--
+-- cleanup
+--
+-- start_ignore
+drop operator class if exists int4_test_ops using btree;
+NOTICE:  operator class "int4_test_ops" does not exist for access method "btree", skipping
+drop schema if exists test_reorder;
+-- end_ignore
+--
+-- setup
+--
+-- start_ignore
+create extension if not exists gp_debug_numsegments;
+-- end_ignore
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+create schema test_reorder;
+set search_path to test_reorder,public;
+-- an alternative btree int opclass, for testing purpose
+create operator class int4_test_ops for type int using btree
+    as function 1 (int,int) btint4cmp(int,int);
+--
+-- reorder tests
+--
+-- some tricks:
+-- - tables are created on seg0 only, so SELECT output are unrelative to the
+--   number of segments;
+-- - SELECT is used to verify the data order, an "order by true" clause is
+--   appended to let the regress framework do not sort the output implicitly;
+-- - SELECT with both seqscan and indexscan to verify the order;
+--
+-- common setting
+\set nrows 10
+-- heap + btree
+\set tname 'heap_btree'
+\set topts
+\set tparts
+\set itype 'btree'
+\set iopts
+\i sql/reorder.template
+\set iname :tname '_idx'
+\set inamestr '''' :iname ''''
+create table :tname
+     ( c1 int
+     , c2 bigint
+     , c3 double precision
+     , c4 text
+     , c5 timestamp
+     , c6 date
+     )
+:topts
+distributed by (c1)
+:tparts
+;
+insert into :tname
+select i as c1
+     , i as c2
+     , i as c3
+     , i as c4
+     , '2000-01-01'::timestamp + i::text::interval as c5
+     , '2000-01-01'::date + (i || 'd')::interval as c6
+  from generate_series(:nrows - 1, 0, -1) i
+;
+insert into :tname
+values (null, 0, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, null, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, null, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, null, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, 0, null, '2000-01-01')
+     , (0, 0, 0, 0, '2000-01-01', null)
+;
+create index :iname on :tname using :itype
+     ( c1
+     , c2 desc
+     , c3 asc nulls first
+     , c4 asc nulls last
+     , c5 desc nulls first
+     , c6 desc nulls last
+     )
+:iopts
+;
+select * from reorder_by_index(:inamestr);
+  relation  |     index      
+------------+----------------
+ heap_btree | heap_btree_idx
+(1 row)
+
+-- select with seqscan
+set enable_seqscan to on;
+set enable_indexscan to off;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- select with indexscan
+set enable_seqscan to off;
+set enable_indexscan to on;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- reset the gucs
+reset enable_seqscan;
+reset enable_indexscan;
+reset enable_indexonlyscan;
+reset enable_bitmapscan;
+-- negative: reorder does not support expression index keys
+create index negative_expr_idx on :tname (abs(c1));
+select * from reorder_by_index('negative_expr_idx');
+ERROR:  expression index keys are not supported
+CONTEXT:  PL/pgSQL function __reorder_build_sort_by_clause(regclass) line 20 at RAISE
+SQL statement "SELECT __reorder_build_sort_by_clause(ind)"
+PL/pgSQL function reorder_part_by_index(regclass) line 30 at SQL statement
+PL/pgSQL function reorder_by_index(regclass) line 27 at RETURN QUERY
+-- negative: reorder does not support non-default operator classes
+create index negative_opclass_idx on :tname (c1 int4_test_ops);
+select * from reorder_by_index('negative_opclass_idx');
+ERROR:  non-default operator classes on index keys are not supported
+CONTEXT:  PL/pgSQL function __reorder_build_sort_by_clause(regclass) line 31 at RAISE
+SQL statement "SELECT __reorder_build_sort_by_clause(ind)"
+PL/pgSQL function reorder_part_by_index(regclass) line 30 at SQL statement
+PL/pgSQL function reorder_by_index(regclass) line 27 at RETURN QUERY
+-- ao table + btree
+\set tname 'ao_toin'
+\set topts 'with (appendonly=true, orientation=row, compresstype=zlib)'
+\set tparts
+\set itype 'btree'
+\set iopts
+\i sql/reorder.template
+\set iname :tname '_idx'
+\set inamestr '''' :iname ''''
+create table :tname
+     ( c1 int
+     , c2 bigint
+     , c3 double precision
+     , c4 text
+     , c5 timestamp
+     , c6 date
+     )
+:topts
+distributed by (c1)
+:tparts
+;
+insert into :tname
+select i as c1
+     , i as c2
+     , i as c3
+     , i as c4
+     , '2000-01-01'::timestamp + i::text::interval as c5
+     , '2000-01-01'::date + (i || 'd')::interval as c6
+  from generate_series(:nrows - 1, 0, -1) i
+;
+insert into :tname
+values (null, 0, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, null, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, null, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, null, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, 0, null, '2000-01-01')
+     , (0, 0, 0, 0, '2000-01-01', null)
+;
+create index :iname on :tname using :itype
+     ( c1
+     , c2 desc
+     , c3 asc nulls first
+     , c4 asc nulls last
+     , c5 desc nulls first
+     , c6 desc nulls last
+     )
+:iopts
+;
+select * from reorder_by_index(:inamestr);
+ relation |    index    
+----------+-------------
+ ao_toin  | ao_toin_idx
+(1 row)
+
+-- select with seqscan
+set enable_seqscan to on;
+set enable_indexscan to off;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- select with indexscan
+set enable_seqscan to off;
+set enable_indexscan to on;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- reset the gucs
+reset enable_seqscan;
+reset enable_indexscan;
+reset enable_indexonlyscan;
+reset enable_bitmapscan;
+-- aocs table + btree
+\set tname 'aocs_toin'
+\set topts 'with (appendonly=true, orientation=column, compresstype=zlib)'
+\set tparts
+\set itype 'btree'
+\set iopts
+\i sql/reorder.template
+\set iname :tname '_idx'
+\set inamestr '''' :iname ''''
+create table :tname
+     ( c1 int
+     , c2 bigint
+     , c3 double precision
+     , c4 text
+     , c5 timestamp
+     , c6 date
+     )
+:topts
+distributed by (c1)
+:tparts
+;
+insert into :tname
+select i as c1
+     , i as c2
+     , i as c3
+     , i as c4
+     , '2000-01-01'::timestamp + i::text::interval as c5
+     , '2000-01-01'::date + (i || 'd')::interval as c6
+  from generate_series(:nrows - 1, 0, -1) i
+;
+insert into :tname
+values (null, 0, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, null, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, null, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, null, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, 0, null, '2000-01-01')
+     , (0, 0, 0, 0, '2000-01-01', null)
+;
+create index :iname on :tname using :itype
+     ( c1
+     , c2 desc
+     , c3 asc nulls first
+     , c4 asc nulls last
+     , c5 desc nulls first
+     , c6 desc nulls last
+     )
+:iopts
+;
+select * from reorder_by_index(:inamestr);
+ relation  |     index     
+-----------+---------------
+ aocs_toin | aocs_toin_idx
+(1 row)
+
+-- select with seqscan
+set enable_seqscan to on;
+set enable_indexscan to off;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- select with indexscan
+set enable_seqscan to off;
+set enable_indexscan to on;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- reset the gucs
+reset enable_seqscan;
+reset enable_indexscan;
+reset enable_indexonlyscan;
+reset enable_bitmapscan;
+-- partitioned ao table + btree
+\set tname 'parted_ao_toin'
+\set topts 'with (appendonly=true, orientation=row, compresstype=zlib)'
+\set tparts 'partition by range(c1) (start(0) end(' :nrows ') every(1), default partition extra)'
+\set itype 'btree'
+\set iopts
+\i sql/reorder.template
+\set iname :tname '_idx'
+\set inamestr '''' :iname ''''
+create table :tname
+     ( c1 int
+     , c2 bigint
+     , c3 double precision
+     , c4 text
+     , c5 timestamp
+     , c6 date
+     )
+:topts
+distributed by (c1)
+:tparts
+;
+insert into :tname
+select i as c1
+     , i as c2
+     , i as c3
+     , i as c4
+     , '2000-01-01'::timestamp + i::text::interval as c5
+     , '2000-01-01'::date + (i || 'd')::interval as c6
+  from generate_series(:nrows - 1, 0, -1) i
+;
+insert into :tname
+values (null, 0, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, null, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, null, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, null, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, 0, null, '2000-01-01')
+     , (0, 0, 0, 0, '2000-01-01', null)
+;
+create index :iname on :tname using :itype
+     ( c1
+     , c2 desc
+     , c3 asc nulls first
+     , c4 asc nulls last
+     , c5 desc nulls first
+     , c6 desc nulls last
+     )
+:iopts
+;
+select * from reorder_by_index(:inamestr);
+          relation          |                      index                       
+----------------------------+--------------------------------------------------
+ parted_ao_toin_1_prt_2     | parted_ao_toin_1_prt_2_c1_c2_c3_c4_c5_c6_idx
+ parted_ao_toin_1_prt_3     | parted_ao_toin_1_prt_3_c1_c2_c3_c4_c5_c6_idx
+ parted_ao_toin_1_prt_4     | parted_ao_toin_1_prt_4_c1_c2_c3_c4_c5_c6_idx
+ parted_ao_toin_1_prt_5     | parted_ao_toin_1_prt_5_c1_c2_c3_c4_c5_c6_idx
+ parted_ao_toin_1_prt_6     | parted_ao_toin_1_prt_6_c1_c2_c3_c4_c5_c6_idx
+ parted_ao_toin_1_prt_7     | parted_ao_toin_1_prt_7_c1_c2_c3_c4_c5_c6_idx
+ parted_ao_toin_1_prt_8     | parted_ao_toin_1_prt_8_c1_c2_c3_c4_c5_c6_idx
+ parted_ao_toin_1_prt_9     | parted_ao_toin_1_prt_9_c1_c2_c3_c4_c5_c6_idx
+ parted_ao_toin_1_prt_10    | parted_ao_toin_1_prt_10_c1_c2_c3_c4_c5_c6_idx
+ parted_ao_toin_1_prt_11    | parted_ao_toin_1_prt_11_c1_c2_c3_c4_c5_c6_idx
+ parted_ao_toin_1_prt_extra | parted_ao_toin_1_prt_extra_c1_c2_c3_c4_c5_c6_idx
+(11 rows)
+
+-- select with seqscan
+set enable_seqscan to on;
+set enable_indexscan to off;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- select with indexscan
+set enable_seqscan to off;
+set enable_indexscan to on;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- reset the gucs
+reset enable_seqscan;
+reset enable_indexscan;
+reset enable_indexonlyscan;
+reset enable_bitmapscan;
+-- partitioned aocs table + btree
+\set tname 'parted_aocs_toin'
+\set topts 'with (appendonly=true, orientation=column, compresstype=zlib)'
+\set tparts 'partition by range(c1) (start(0) end(' :nrows ') every(1), default partition extra)'
+\set itype 'btree'
+\set iopts
+\i sql/reorder.template
+\set iname :tname '_idx'
+\set inamestr '''' :iname ''''
+create table :tname
+     ( c1 int
+     , c2 bigint
+     , c3 double precision
+     , c4 text
+     , c5 timestamp
+     , c6 date
+     )
+:topts
+distributed by (c1)
+:tparts
+;
+insert into :tname
+select i as c1
+     , i as c2
+     , i as c3
+     , i as c4
+     , '2000-01-01'::timestamp + i::text::interval as c5
+     , '2000-01-01'::date + (i || 'd')::interval as c6
+  from generate_series(:nrows - 1, 0, -1) i
+;
+insert into :tname
+values (null, 0, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, null, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, null, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, null, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, 0, null, '2000-01-01')
+     , (0, 0, 0, 0, '2000-01-01', null)
+;
+create index :iname on :tname using :itype
+     ( c1
+     , c2 desc
+     , c3 asc nulls first
+     , c4 asc nulls last
+     , c5 desc nulls first
+     , c6 desc nulls last
+     )
+:iopts
+;
+select * from reorder_by_index(:inamestr);
+           relation           |                       index                        
+------------------------------+----------------------------------------------------
+ parted_aocs_toin_1_prt_2     | parted_aocs_toin_1_prt_2_c1_c2_c3_c4_c5_c6_idx
+ parted_aocs_toin_1_prt_3     | parted_aocs_toin_1_prt_3_c1_c2_c3_c4_c5_c6_idx
+ parted_aocs_toin_1_prt_4     | parted_aocs_toin_1_prt_4_c1_c2_c3_c4_c5_c6_idx
+ parted_aocs_toin_1_prt_5     | parted_aocs_toin_1_prt_5_c1_c2_c3_c4_c5_c6_idx
+ parted_aocs_toin_1_prt_6     | parted_aocs_toin_1_prt_6_c1_c2_c3_c4_c5_c6_idx
+ parted_aocs_toin_1_prt_7     | parted_aocs_toin_1_prt_7_c1_c2_c3_c4_c5_c6_idx
+ parted_aocs_toin_1_prt_8     | parted_aocs_toin_1_prt_8_c1_c2_c3_c4_c5_c6_idx
+ parted_aocs_toin_1_prt_9     | parted_aocs_toin_1_prt_9_c1_c2_c3_c4_c5_c6_idx
+ parted_aocs_toin_1_prt_10    | parted_aocs_toin_1_prt_10_c1_c2_c3_c4_c5_c6_idx
+ parted_aocs_toin_1_prt_11    | parted_aocs_toin_1_prt_11_c1_c2_c3_c4_c5_c6_idx
+ parted_aocs_toin_1_prt_extra | parted_aocs_toin_1_prt_extra_c1_c2_c3_c4_c5_c6_idx
+(11 rows)
+
+-- select with seqscan
+set enable_seqscan to on;
+set enable_indexscan to off;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- select with indexscan
+set enable_seqscan to off;
+set enable_indexscan to on;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- reset the gucs
+reset enable_seqscan;
+reset enable_indexscan;
+reset enable_indexonlyscan;
+reset enable_bitmapscan;
+-- heap + toin
+\set tname 'heap_toin'
+\set topts
+\set tparts
+\set itype 'toin'
+\set iopts 'with (pages_per_range=1)'
+\i sql/reorder.template
+\set iname :tname '_idx'
+\set inamestr '''' :iname ''''
+create table :tname
+     ( c1 int
+     , c2 bigint
+     , c3 double precision
+     , c4 text
+     , c5 timestamp
+     , c6 date
+     )
+:topts
+distributed by (c1)
+:tparts
+;
+insert into :tname
+select i as c1
+     , i as c2
+     , i as c3
+     , i as c4
+     , '2000-01-01'::timestamp + i::text::interval as c5
+     , '2000-01-01'::date + (i || 'd')::interval as c6
+  from generate_series(:nrows - 1, 0, -1) i
+;
+insert into :tname
+values (null, 0, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, null, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, null, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, null, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, 0, null, '2000-01-01')
+     , (0, 0, 0, 0, '2000-01-01', null)
+;
+create index :iname on :tname using :itype
+     ( c1
+     , c2 desc
+     , c3 asc nulls first
+     , c4 asc nulls last
+     , c5 desc nulls first
+     , c6 desc nulls last
+     )
+:iopts
+;
+select * from reorder_by_index(:inamestr);
+ relation  |     index     
+-----------+---------------
+ heap_toin | heap_toin_idx
+(1 row)
+
+-- select with seqscan
+set enable_seqscan to on;
+set enable_indexscan to off;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- select with indexscan
+set enable_seqscan to off;
+set enable_indexscan to on;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- reset the gucs
+reset enable_seqscan;
+reset enable_indexscan;
+reset enable_indexonlyscan;
+reset enable_bitmapscan;
+-- partitioned heap table + toin
+\set tname 'parted_heap_toin'
+\set topts
+\set tparts 'partition by range(c1) (start(0) end(' :nrows ') every(1), default partition extra)'
+\set itype 'toin'
+\set iopts 'with (pages_per_range=1)'
+\i sql/reorder.template
+\set iname :tname '_idx'
+\set inamestr '''' :iname ''''
+create table :tname
+     ( c1 int
+     , c2 bigint
+     , c3 double precision
+     , c4 text
+     , c5 timestamp
+     , c6 date
+     )
+:topts
+distributed by (c1)
+:tparts
+;
+insert into :tname
+select i as c1
+     , i as c2
+     , i as c3
+     , i as c4
+     , '2000-01-01'::timestamp + i::text::interval as c5
+     , '2000-01-01'::date + (i || 'd')::interval as c6
+  from generate_series(:nrows - 1, 0, -1) i
+;
+insert into :tname
+values (null, 0, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, null, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, null, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, null, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, 0, null, '2000-01-01')
+     , (0, 0, 0, 0, '2000-01-01', null)
+;
+create index :iname on :tname using :itype
+     ( c1
+     , c2 desc
+     , c3 asc nulls first
+     , c4 asc nulls last
+     , c5 desc nulls first
+     , c6 desc nulls last
+     )
+:iopts
+;
+select * from reorder_by_index(:inamestr);
+           relation           |                       index                        
+------------------------------+----------------------------------------------------
+ parted_heap_toin_1_prt_2     | parted_heap_toin_1_prt_2_c1_c2_c3_c4_c5_c6_idx
+ parted_heap_toin_1_prt_3     | parted_heap_toin_1_prt_3_c1_c2_c3_c4_c5_c6_idx
+ parted_heap_toin_1_prt_4     | parted_heap_toin_1_prt_4_c1_c2_c3_c4_c5_c6_idx
+ parted_heap_toin_1_prt_5     | parted_heap_toin_1_prt_5_c1_c2_c3_c4_c5_c6_idx
+ parted_heap_toin_1_prt_6     | parted_heap_toin_1_prt_6_c1_c2_c3_c4_c5_c6_idx
+ parted_heap_toin_1_prt_7     | parted_heap_toin_1_prt_7_c1_c2_c3_c4_c5_c6_idx
+ parted_heap_toin_1_prt_8     | parted_heap_toin_1_prt_8_c1_c2_c3_c4_c5_c6_idx
+ parted_heap_toin_1_prt_9     | parted_heap_toin_1_prt_9_c1_c2_c3_c4_c5_c6_idx
+ parted_heap_toin_1_prt_10    | parted_heap_toin_1_prt_10_c1_c2_c3_c4_c5_c6_idx
+ parted_heap_toin_1_prt_11    | parted_heap_toin_1_prt_11_c1_c2_c3_c4_c5_c6_idx
+ parted_heap_toin_1_prt_extra | parted_heap_toin_1_prt_extra_c1_c2_c3_c4_c5_c6_idx
+(11 rows)
+
+-- select with seqscan
+set enable_seqscan to on;
+set enable_indexscan to off;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- select with indexscan
+set enable_seqscan to off;
+set enable_indexscan to on;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- reset the gucs
+reset enable_seqscan;
+reset enable_indexscan;
+reset enable_indexonlyscan;
+reset enable_bitmapscan;
+-- extra test for randomly distributed table
+create table heap_random (like heap_btree) distributed randomly;
+insert into heap_random select * from heap_btree;
+create index heap_random_idx on heap_random using btree
+     ( c1
+     , c2 desc
+     , c3 asc nulls first
+     , c4 asc nulls last
+     , c5 desc nulls first
+     , c6 desc nulls last
+     )
+;
+select * from reorder_by_index('heap_random_idx');
+  relation   |      index      
+-------------+-----------------
+ heap_random | heap_random_idx
+(1 row)
+
+select * from heap_random;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- extra test for replicated distributed table
+create table heap_replicated (like heap_btree) distributed replicated;
+insert into heap_replicated select * from heap_btree;
+create index heap_replicated_idx on heap_replicated using btree
+     ( c1
+     , c2 desc
+     , c3 asc nulls first
+     , c4 asc nulls last
+     , c5 desc nulls first
+     , c6 desc nulls last
+     )
+;
+select * from reorder_by_index('heap_replicated_idx');
+    relation     |        index        
+-----------------+---------------------
+ heap_replicated | heap_replicated_idx
+(1 row)
+
+select * from heap_replicated;
+ c1 | c2 | c3 | c4 |            c5            |     c6     
+----+----+----+----+--------------------------+------------
+  0 |    |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |    | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  |                          | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  0 |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 
+  0 |  0 |  0 |    | Sat Jan 01 00:00:00 2000 | 01-01-2000
+  1 |  1 |  1 | 1  | Sat Jan 01 00:00:01 2000 | 01-02-2000
+  2 |  2 |  2 | 2  | Sat Jan 01 00:00:02 2000 | 01-03-2000
+  3 |  3 |  3 | 3  | Sat Jan 01 00:00:03 2000 | 01-04-2000
+  4 |  4 |  4 | 4  | Sat Jan 01 00:00:04 2000 | 01-05-2000
+  5 |  5 |  5 | 5  | Sat Jan 01 00:00:05 2000 | 01-06-2000
+  6 |  6 |  6 | 6  | Sat Jan 01 00:00:06 2000 | 01-07-2000
+  7 |  7 |  7 | 7  | Sat Jan 01 00:00:07 2000 | 01-08-2000
+  8 |  8 |  8 | 8  | Sat Jan 01 00:00:08 2000 | 01-09-2000
+  9 |  9 |  9 | 9  | Sat Jan 01 00:00:09 2000 | 01-10-2000
+    |  0 |  0 | 0  | Sat Jan 01 00:00:00 2000 | 01-01-2000
+(16 rows)
+
+-- non-seq scans are disabled during the reorder function, but they should be
+-- restored automatically.
+show enable_seqscan;
+ enable_seqscan 
+----------------
+ on
+(1 row)
+
+show enable_indexscan;
+ enable_indexscan 
+------------------
+ on
+(1 row)
+
+show enable_indexonlyscan;
+ enable_indexonlyscan 
+----------------------
+ on
+(1 row)
+
+show enable_bitmapscan;
+ enable_bitmapscan 
+-------------------
+ on
+(1 row)
+
+-- they should be restored even if on exceptions.
+select reorder_by_index('pg_class_oid_index');
+ERROR:  invalid policy type: <NULL>
+CONTEXT:  PL/pgSQL function __reorder_build_dist_by_clause(regclass) line 49 at RAISE
+SQL statement "SELECT __reorder_build_dist_by_clause(rel)"
+PL/pgSQL function reorder_part_by_index(regclass) line 29 at SQL statement
+PL/pgSQL function reorder_by_index(regclass) line 27 at RETURN QUERY
+show enable_seqscan;
+ enable_seqscan 
+----------------
+ on
+(1 row)
+
+show enable_indexscan;
+ enable_indexscan 
+------------------
+ on
+(1 row)
+
+show enable_indexonlyscan;
+ enable_indexonlyscan 
+----------------------
+ on
+(1 row)
+
+show enable_bitmapscan;
+ enable_bitmapscan 
+-------------------
+ on
+(1 row)
+

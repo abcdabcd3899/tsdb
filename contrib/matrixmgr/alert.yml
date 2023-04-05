@@ -1,0 +1,15 @@
+# MatrixDB Alert Config
+# changing this file needs restart mxui service
+#   sudo systemctl restart matrixdb.supervisor.service
+
+# For your convenience, please follow these guides to apply
+# aliyun keys and templates:
+# SMS:   https://help.aliyun.com/document_detail/55288.html
+# Voice: https://help.aliyun.com/document_detail/55070.html
+aliyun_service:
+  access_key_id: "<ACCESS_KEY_ID>>"
+  access_key_secret: "<ACCESS_KEY_SECRET>"
+  signature: "<YOUR_COMPANY_SIGNATURE>"
+  sms_template_code: "SMS_<YOUR_TEMPLATE_ID>"
+  tts_template_code: "TTS_<YOUR_TEMPLATE_ID>"
+  region_id: "cn-hangzhou"

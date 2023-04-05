@@ -1,0 +1,13 @@
+--
+-- cleanup
+--
+
+-- start_ignore
+drop index if exists :iname;
+-- end_ignore
+
+--
+-- build index
+--
+
+create index :iname on :tname using :itype (:keys) :opts;

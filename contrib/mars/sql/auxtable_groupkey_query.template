@@ -1,0 +1,180 @@
+select ctid, * from :tname;
+
+select * from :tname
+ where tag > 1;
+
+select * from :tname
+ where tag >= 1;
+
+select * from :tname
+ where tag = 1;
+
+select * from :tname
+ where tag <= 1;
+
+select * from :tname
+ where tag < 1;
+
+select * from :tname
+ where ts > '2021-07-15 05:14:20';
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20';
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20'::timestamp;
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20'::timestamptz;
+
+select * from :tname
+ where ts = '2021-07-15 05:14:20';
+
+select * from :tname
+ where ts <= '2021-07-15 05:14:20';
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20';
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20'::timestamp;
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20'::timestamptz;
+
+select * from :tname
+ where tag > 1 and ts > '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag > 1 and ts >= '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag > 1 and ts = '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag > 1 and ts <= '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag > 1 and ts < '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag >= 1 and ts > '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag >= 1 and ts >= '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag >= 1 and ts = '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag >= 1 and ts <= '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag >= 1 and ts < '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag = 1 and ts > '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag = 1 and ts >= '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag = 1 and ts = '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag = 1 and ts <= '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag = 1 and ts < '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag <= 1 and ts > '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag <= 1 and ts >= '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag <= 1 and ts = '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag <= 1 and ts <= '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag <= 1 and ts < '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag < 1 and ts > '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag < 1 and ts >= '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag < 1 and ts = '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag < 1 and ts <= '2021-07-15 05:14:20';
+
+select * from :tname
+ where tag < 1 and ts < '2021-07-15 05:14:20';
+
+select * from :tname order by ts;
+
+select * from :tname
+ where tag <= 1 order by ts;
+
+select * from :tname
+ where ts = '2021-07-15 05:14:20' order by ts;
+
+select * from :tname
+ where tag > 1 and ts >= '2021-07-15 05:14:20' order by ts;
+
+select * from :tname
+ where tag >= 1 and ts > '2021-07-15 05:14:20' order by ts;
+
+select * from :tname
+ where tag >= 1 and ts < '2021-07-15 05:14:20' order by ts;
+
+select * from :tname
+ where tag = 1 and ts <= '2021-07-15 05:14:20' order by ts;
+
+select * from :tname
+ where tag <= 1 and ts = '2021-07-15 05:14:20' order by ts;
+
+select * from :tname
+ where tag < 1 and ts >= '2021-07-15 05:14:20' order by ts;
+
+select time_bucket('30 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+
+select time_bucket('60 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+
+select time_bucket('120 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+
+select time_bucket('180 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;

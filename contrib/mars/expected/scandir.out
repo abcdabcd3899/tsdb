@@ -1,0 +1,72 @@
+--
+-- verify the scan in different directions.
+--
+-- TODO: order on float columns.
+--
+-- start_ignore
+create extension if not exists mars;
+-- end_ignore
+\set tname test_mars_scandir_t1
+drop table if exists :tname;
+-- we dispatch by batch, so the tuples of the same batch are on the same seg,
+-- this is important to ensure the behavior of this test.
+create table :tname (batch int, c1 int)
+       using mars
+        with (global_order_col_ = "{c1}")
+ distributed by (batch);
+insert into :tname
+     select 0 as batch
+          , i as c1
+       from generate_series(1, 1000) i;
+explain (costs off)
+select c1
+  from :tname
+ order by c1
+ limit 1;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Limit
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         Merge Key: c1
+         ->  Limit
+               ->  Sort
+                     Sort Key: c1
+                     ->  Seq Scan on test_mars_scandir_t1
+ Optimizer: Postgres query optimizer
+(8 rows)
+
+select c1
+  from :tname
+ order by c1
+ limit 1;
+ c1 
+----
+  1
+(1 row)
+
+explain (costs off)
+select c1
+  from :tname
+ order by c1 desc
+ limit 1;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Limit
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         Merge Key: c1
+         ->  Limit
+               ->  Sort
+                     Sort Key: c1 DESC
+                     ->  Seq Scan on test_mars_scandir_t1
+ Optimizer: Postgres query optimizer
+(8 rows)
+
+select c1
+  from :tname
+ order by c1 desc
+ limit 1;
+  c1  
+------
+ 1000
+(1 row)
+

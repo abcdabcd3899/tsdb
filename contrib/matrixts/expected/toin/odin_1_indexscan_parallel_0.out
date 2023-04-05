@@ -1,0 +1,1515 @@
+set search_path to test_toin;
+set enable_seqscan to off;
+set enable_bitmapscan to off;
+set enable_indexonlyscan to off;
+set enable_indexscan to on;
+-- enable parallel scan
+set enable_parallel_mode to on;
+set max_parallel_workers_per_gather to 1;
+set min_parallel_index_scan_size to '32kB';
+--
+-- fill the settings for the template
+--
+\set tname 't_data'
+\set explain 'explain (costs off)'
+--
+-- run the template
+--
+\i sql/toin/operator.template
+--
+-- EQ
+--
+-- match
+:explain
+select * from :tname where c1 = 24680;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 = 24680;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+ 24680 | 24685
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(10 rows)
+
+-- mismatch: hole
+:explain
+select * from :tname where c1 = 13570;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_2_c1_c11_idx on t_data_1_prt_2
+         Index Cond: (c1 = 13570)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 = 13570;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- mismatch: < min
+:explain
+select * from :tname where c1 = -1;
+             QUERY PLAN              
+-------------------------------------
+ Result
+   One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select * from :tname where c1 = -1;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- mismatch: > max
+:explain
+select * from :tname where c1 = 10000000;
+             QUERY PLAN              
+-------------------------------------
+ Result
+   One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select * from :tname where c1 = 10000000;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- exact match
+:explain
+select * from :tname where c1 = 24680 and c2 = 24685;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 = 24685)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 = 24685;
+  c1   |  c2   
+-------+-------
+ 24680 | 24685
+(1 row)
+
+-- mismatch on c2, as index cond or filter
+:explain
+select * from :tname where c1 = 24680 and c2 = 13579;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 = 13579)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 = 13579;
+ c1 | c2 
+----+----
+(0 rows)
+
+--
+-- LT
+--
+-- match on edge
+:explain
+select * from :tname where c1 < 40;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: (c1 < 40)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 < 40;
+ c1 | c2 
+----+----
+  0 |  0
+  0 |  1
+  0 |  2
+  0 |  3
+  0 |  4
+  0 |  5
+  0 |  6
+  0 |  7
+  0 |  8
+  0 |  9
+ 20 | 20
+ 20 | 21
+ 20 | 22
+ 20 | 23
+ 20 | 24
+ 20 | 25
+ 20 | 26
+ 20 | 27
+ 20 | 28
+ 20 | 29
+(20 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 < 40 and c2 < 5;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: (c1 < 40)
+         Filter: (c2 < 5)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 < 40 and c2 < 5;
+ c1 | c2 
+----+----
+  0 |  0
+  0 |  1
+  0 |  2
+  0 |  3
+  0 |  4
+(5 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 < 40 and c2 < 25;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: (c1 < 40)
+         Filter: (c2 < 25)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 < 40 and c2 < 25;
+ c1 | c2 
+----+----
+  0 |  0
+  0 |  1
+  0 |  2
+  0 |  3
+  0 |  4
+  0 |  5
+  0 |  6
+  0 |  7
+  0 |  8
+  0 |  9
+ 20 | 20
+ 20 | 21
+ 20 | 22
+ 20 | 23
+ 20 | 24
+(15 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 < 40 and c2 = 25;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: (c1 < 40)
+         Filter: (c2 = 25)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 < 40 and c2 = 25;
+ c1 | c2 
+----+----
+ 20 | 25
+(1 row)
+
+-- match in the middle
+:explain
+select * from :tname where c1 = 24680 and c2 < 24685;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 < 24685)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 < 24685;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+(5 rows)
+
+-- mismatch
+:explain
+select * from :tname where c1 = 24680 and c2 < 24680;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 < 24680)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 < 24680;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 = 24680 and c1 < 2468;
+             QUERY PLAN              
+-------------------------------------
+ Result
+   One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select * from :tname where c1 = 24680 and c1 < 2468;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- match, with useless range
+:explain
+select * from :tname where c1 = 24680 and c1 < 2468000;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: ((c1 < 2468000) AND (c1 = 24680))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 = 24680 and c1 < 2468000;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+ 24680 | 24685
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(10 rows)
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c2 < 2468000;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 < 2468000)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 < 2468000;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+ 24680 | 24685
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(10 rows)
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 < 40 and c1 < 10000000;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: ((c1 < 40) AND (c1 < 10000000))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 < 40 and c1 < 10000000;
+ c1 | c2 
+----+----
+  0 |  0
+  0 |  1
+  0 |  2
+  0 |  3
+  0 |  4
+  0 |  5
+  0 |  6
+  0 |  7
+  0 |  8
+  0 |  9
+ 20 | 20
+ 20 | 21
+ 20 | 22
+ 20 | 23
+ 20 | 24
+ 20 | 25
+ 20 | 26
+ 20 | 27
+ 20 | 28
+ 20 | 29
+(20 rows)
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 < 10000000 and c1 < 40;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: ((c1 < 10000000) AND (c1 < 40))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 < 10000000 and c1 < 40;
+ c1 | c2 
+----+----
+  0 |  0
+  0 |  1
+  0 |  2
+  0 |  3
+  0 |  4
+  0 |  5
+  0 |  6
+  0 |  7
+  0 |  8
+  0 |  9
+ 20 | 20
+ 20 | 21
+ 20 | 22
+ 20 | 23
+ 20 | 24
+ 20 | 25
+ 20 | 26
+ 20 | 27
+ 20 | 28
+ 20 | 29
+(20 rows)
+
+--
+-- LE
+--
+-- match on edge
+:explain
+select * from :tname where c1 <= 20;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: (c1 <= 20)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 <= 20;
+ c1 | c2 
+----+----
+  0 |  0
+  0 |  1
+  0 |  2
+  0 |  3
+  0 |  4
+  0 |  5
+  0 |  6
+  0 |  7
+  0 |  8
+  0 |  9
+ 20 | 20
+ 20 | 21
+ 20 | 22
+ 20 | 23
+ 20 | 24
+ 20 | 25
+ 20 | 26
+ 20 | 27
+ 20 | 28
+ 20 | 29
+(20 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 <= 20 and c2 <= 5;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: (c1 <= 20)
+         Filter: (c2 <= 5)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 <= 20 and c2 <= 5;
+ c1 | c2 
+----+----
+  0 |  0
+  0 |  1
+  0 |  2
+  0 |  3
+  0 |  4
+  0 |  5
+(6 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 <= 20 and c2 <= 25;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: (c1 <= 20)
+         Filter: (c2 <= 25)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 <= 20 and c2 <= 25;
+ c1 | c2 
+----+----
+  0 |  0
+  0 |  1
+  0 |  2
+  0 |  3
+  0 |  4
+  0 |  5
+  0 |  6
+  0 |  7
+  0 |  8
+  0 |  9
+ 20 | 20
+ 20 | 21
+ 20 | 22
+ 20 | 23
+ 20 | 24
+ 20 | 25
+(16 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 <= 20 and c2 = 25;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: (c1 <= 20)
+         Filter: (c2 = 25)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 <= 20 and c2 = 25;
+ c1 | c2 
+----+----
+ 20 | 25
+(1 row)
+
+-- match in the middle
+:explain
+select * from :tname where c1 = 24680 and c2 <= 24685;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 <= 24685)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 <= 24685;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+ 24680 | 24685
+(6 rows)
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c2 <= 24680;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 <= 24680)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 <= 24680;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+(1 row)
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 = 24680 and c1 <= 2468;
+             QUERY PLAN              
+-------------------------------------
+ Result
+   One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select * from :tname where c1 = 24680 and c1 <= 2468;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- match, with useless range
+:explain
+select * from :tname where c1 = 24680 and c1 <= 2468000;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: ((c1 <= 2468000) AND (c1 = 24680))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 = 24680 and c1 <= 2468000;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+ 24680 | 24685
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(10 rows)
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c2 <= 2468000;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 <= 2468000)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 <= 2468000;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+ 24680 | 24685
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(10 rows)
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 <= 20 and c1 <= 10000000;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: ((c1 <= 20) AND (c1 <= 10000000))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 <= 20 and c1 <= 10000000;
+ c1 | c2 
+----+----
+  0 |  0
+  0 |  1
+  0 |  2
+  0 |  3
+  0 |  4
+  0 |  5
+  0 |  6
+  0 |  7
+  0 |  8
+  0 |  9
+ 20 | 20
+ 20 | 21
+ 20 | 22
+ 20 | 23
+ 20 | 24
+ 20 | 25
+ 20 | 26
+ 20 | 27
+ 20 | 28
+ 20 | 29
+(20 rows)
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 <= 10000000 and c1 <= 20;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_1_c1_c11_idx on t_data_1_prt_1
+         Index Cond: ((c1 <= 10000000) AND (c1 <= 20))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 <= 10000000 and c1 <= 20;
+ c1 | c2 
+----+----
+  0 |  0
+  0 |  1
+  0 |  2
+  0 |  3
+  0 |  4
+  0 |  5
+  0 |  6
+  0 |  7
+  0 |  8
+  0 |  9
+ 20 | 20
+ 20 | 21
+ 20 | 22
+ 20 | 23
+ 20 | 24
+ 20 | 25
+ 20 | 26
+ 20 | 27
+ 20 | 28
+ 20 | 29
+(20 rows)
+
+--
+-- GT
+--
+-- match on edge
+:explain
+select * from :tname where c1 > 199940;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: (c1 > 199940)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 > 199940;
+   c1   |   c2   
+--------+--------
+ 199960 | 199960
+ 199960 | 199961
+ 199960 | 199962
+ 199960 | 199963
+ 199960 | 199964
+ 199960 | 199965
+ 199960 | 199966
+ 199960 | 199967
+ 199960 | 199968
+ 199960 | 199969
+ 199980 | 199980
+ 199980 | 199981
+ 199980 | 199982
+ 199980 | 199983
+ 199980 | 199984
+ 199980 | 199985
+ 199980 | 199986
+ 199980 | 199987
+ 199980 | 199988
+ 199980 | 199989
+(20 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 > 199940 and c2 > 199985;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: (c1 > 199940)
+         Filter: (c2 > 199985)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 > 199940 and c2 > 199985;
+   c1   |   c2   
+--------+--------
+ 199980 | 199986
+ 199980 | 199987
+ 199980 | 199988
+ 199980 | 199989
+(4 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 > 199940 and c2 > 199945;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: (c1 > 199940)
+         Filter: (c2 > 199945)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 > 199940 and c2 > 199945;
+   c1   |   c2   
+--------+--------
+ 199960 | 199960
+ 199960 | 199961
+ 199960 | 199962
+ 199960 | 199963
+ 199960 | 199964
+ 199960 | 199965
+ 199960 | 199966
+ 199960 | 199967
+ 199960 | 199968
+ 199960 | 199969
+ 199980 | 199980
+ 199980 | 199981
+ 199980 | 199982
+ 199980 | 199983
+ 199980 | 199984
+ 199980 | 199985
+ 199980 | 199986
+ 199980 | 199987
+ 199980 | 199988
+ 199980 | 199989
+(20 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 > 199940 and c2 = 199965;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: (c1 > 199940)
+         Filter: (c2 = 199965)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 > 199940 and c2 = 199965;
+   c1   |   c2   
+--------+--------
+ 199960 | 199965
+(1 row)
+
+-- match in the middle
+:explain
+select * from :tname where c1 = 24680 and c2 > 24685;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 > 24685)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 > 24685;
+  c1   |  c2   
+-------+-------
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(4 rows)
+
+-- mismatch
+:explain
+select * from :tname where c1 = 24680 and c2 > 24689;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 > 24689)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 > 24689;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 = 24680 and c1 > 50000;
+             QUERY PLAN              
+-------------------------------------
+ Result
+   One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select * from :tname where c1 = 24680 and c1 > 50000;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- match, with useless range
+:explain
+select * from :tname where c1 = 24680 and c1 > 2000;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: ((c1 > 2000) AND (c1 = 24680))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 = 24680 and c1 > 2000;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+ 24680 | 24685
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(10 rows)
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c2 > 2000;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 > 2000)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 > 2000;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+ 24680 | 24685
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(10 rows)
+
+-- match a range
+:explain
+select * from :tname where c1 > 50000 and c1 < 50040;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_6_c1_c11_idx on t_data_1_prt_6
+         Index Cond: ((c1 > 50000) AND (c1 < 50040))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 > 50000 and c1 < 50040;
+  c1   |  c2   
+-------+-------
+ 50020 | 50020
+ 50020 | 50021
+ 50020 | 50022
+ 50020 | 50023
+ 50020 | 50024
+ 50020 | 50025
+ 50020 | 50026
+ 50020 | 50027
+ 50020 | 50028
+ 50020 | 50029
+(10 rows)
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 > 199940 and c1 > 0;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: ((c1 > 199940) AND (c1 > 0))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 > 199940 and c1 > 0;
+   c1   |   c2   
+--------+--------
+ 199960 | 199960
+ 199960 | 199961
+ 199960 | 199962
+ 199960 | 199963
+ 199960 | 199964
+ 199960 | 199965
+ 199960 | 199966
+ 199960 | 199967
+ 199960 | 199968
+ 199960 | 199969
+ 199980 | 199980
+ 199980 | 199981
+ 199980 | 199982
+ 199980 | 199983
+ 199980 | 199984
+ 199980 | 199985
+ 199980 | 199986
+ 199980 | 199987
+ 199980 | 199988
+ 199980 | 199989
+(20 rows)
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 > 0 and c1 > 199940;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: ((c1 > 0) AND (c1 > 199940))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 > 0 and c1 > 199940;
+   c1   |   c2   
+--------+--------
+ 199960 | 199960
+ 199960 | 199961
+ 199960 | 199962
+ 199960 | 199963
+ 199960 | 199964
+ 199960 | 199965
+ 199960 | 199966
+ 199960 | 199967
+ 199960 | 199968
+ 199960 | 199969
+ 199980 | 199980
+ 199980 | 199981
+ 199980 | 199982
+ 199980 | 199983
+ 199980 | 199984
+ 199980 | 199985
+ 199980 | 199986
+ 199980 | 199987
+ 199980 | 199988
+ 199980 | 199989
+(20 rows)
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 > 50000 and c1 < 40000;
+             QUERY PLAN              
+-------------------------------------
+ Result
+   One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select * from :tname where c1 > 50000 and c1 < 40000;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 < 40000 and c1 > 50000;
+             QUERY PLAN              
+-------------------------------------
+ Result
+   One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select * from :tname where c1 < 40000 and c1 > 50000;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- GE
+-- match on edge
+:explain
+select * from :tname where c1 >= 199960;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: (c1 >= 199960)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 >= 199960;
+   c1   |   c2   
+--------+--------
+ 199960 | 199960
+ 199960 | 199961
+ 199960 | 199962
+ 199960 | 199963
+ 199960 | 199964
+ 199960 | 199965
+ 199960 | 199966
+ 199960 | 199967
+ 199960 | 199968
+ 199960 | 199969
+ 199980 | 199980
+ 199980 | 199981
+ 199980 | 199982
+ 199980 | 199983
+ 199980 | 199984
+ 199980 | 199985
+ 199980 | 199986
+ 199980 | 199987
+ 199980 | 199988
+ 199980 | 199989
+(20 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 >= 199960 and c2 >= 199985;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: (c1 >= 199960)
+         Filter: (c2 >= 199985)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 >= 199960 and c2 >= 199985;
+   c1   |   c2   
+--------+--------
+ 199980 | 199985
+ 199980 | 199986
+ 199980 | 199987
+ 199980 | 199988
+ 199980 | 199989
+(5 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 >= 199960 and c2 >= 199945;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: (c1 >= 199960)
+         Filter: (c2 >= 199945)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 >= 199960 and c2 >= 199945;
+   c1   |   c2   
+--------+--------
+ 199960 | 199960
+ 199960 | 199961
+ 199960 | 199962
+ 199960 | 199963
+ 199960 | 199964
+ 199960 | 199965
+ 199960 | 199966
+ 199960 | 199967
+ 199960 | 199968
+ 199960 | 199969
+ 199980 | 199980
+ 199980 | 199981
+ 199980 | 199982
+ 199980 | 199983
+ 199980 | 199984
+ 199980 | 199985
+ 199980 | 199986
+ 199980 | 199987
+ 199980 | 199988
+ 199980 | 199989
+(20 rows)
+
+-- match on edge, with 2 keys
+:explain
+select * from :tname where c1 >= 199960 and c2 = 199965;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: (c1 >= 199960)
+         Filter: (c2 = 199965)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 >= 199960 and c2 = 199965;
+   c1   |   c2   
+--------+--------
+ 199960 | 199965
+(1 row)
+
+-- match in the middle
+:explain
+select * from :tname where c1 = 24680 and c2 >= 24685;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 >= 24685)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 >= 24685;
+  c1   |  c2   
+-------+-------
+ 24680 | 24685
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(5 rows)
+
+-- mismatch
+:explain
+select * from :tname where c1 = 24680 and c2 >= 24690;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 >= 24690)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 >= 24690;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c1 >= 24680;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: ((c1 >= 24680) AND (c1 = 24680))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 = 24680 and c1 >= 24680;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+ 24680 | 24685
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(10 rows)
+
+-- match, with useless range
+:explain
+select * from :tname where c1 = 24680 and c1 >= 2000;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: ((c1 >= 2000) AND (c1 = 24680))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 = 24680 and c1 >= 2000;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+ 24680 | 24685
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(10 rows)
+
+-- match
+:explain
+select * from :tname where c1 = 24680 and c2 >= 2000;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_3_c1_c11_idx on t_data_1_prt_3
+         Index Cond: (c1 = 24680)
+         Filter: (c2 >= 2000)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 = 24680 and c2 >= 2000;
+  c1   |  c2   
+-------+-------
+ 24680 | 24680
+ 24680 | 24681
+ 24680 | 24682
+ 24680 | 24683
+ 24680 | 24684
+ 24680 | 24685
+ 24680 | 24686
+ 24680 | 24687
+ 24680 | 24688
+ 24680 | 24689
+(10 rows)
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 >= 199960 and c1 >= 0;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: ((c1 >= 199960) AND (c1 >= 0))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 >= 199960 and c1 >= 0;
+   c1   |   c2   
+--------+--------
+ 199960 | 199960
+ 199960 | 199961
+ 199960 | 199962
+ 199960 | 199963
+ 199960 | 199964
+ 199960 | 199965
+ 199960 | 199966
+ 199960 | 199967
+ 199960 | 199968
+ 199960 | 199969
+ 199980 | 199980
+ 199980 | 199981
+ 199980 | 199982
+ 199980 | 199983
+ 199980 | 199984
+ 199980 | 199985
+ 199980 | 199986
+ 199980 | 199987
+ 199980 | 199988
+ 199980 | 199989
+(20 rows)
+
+-- match on edge, with useless range
+:explain
+select * from :tname where c1 >= 0 and c1 >= 199960;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_20_c1_c11_idx on t_data_1_prt_20
+         Index Cond: ((c1 >= 0) AND (c1 >= 199960))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 >= 0 and c1 >= 199960;
+   c1   |   c2   
+--------+--------
+ 199960 | 199960
+ 199960 | 199961
+ 199960 | 199962
+ 199960 | 199963
+ 199960 | 199964
+ 199960 | 199965
+ 199960 | 199966
+ 199960 | 199967
+ 199960 | 199968
+ 199960 | 199969
+ 199980 | 199980
+ 199980 | 199981
+ 199980 | 199982
+ 199980 | 199983
+ 199980 | 199984
+ 199980 | 199985
+ 199980 | 199986
+ 199980 | 199987
+ 199980 | 199988
+ 199980 | 199989
+(20 rows)
+
+-- match a range
+:explain
+select * from :tname where c1 >= 50000 and c1 <= 50020;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_6_c1_c11_idx on t_data_1_prt_6
+         Index Cond: ((c1 >= 50000) AND (c1 <= 50020))
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+select * from :tname where c1 >= 50000 and c1 <= 50020;
+  c1   |  c2   
+-------+-------
+ 50000 | 50000
+ 50000 | 50001
+ 50000 | 50002
+ 50000 | 50003
+ 50000 | 50004
+ 50000 | 50005
+ 50000 | 50006
+ 50000 | 50007
+ 50000 | 50008
+ 50000 | 50009
+ 50020 | 50020
+ 50020 | 50021
+ 50020 | 50022
+ 50020 | 50023
+ 50020 | 50024
+ 50020 | 50025
+ 50020 | 50026
+ 50020 | 50027
+ 50020 | 50028
+ 50020 | 50029
+(20 rows)
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 >= 50000 and c1 <= 40000;
+             QUERY PLAN              
+-------------------------------------
+ Result
+   One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select * from :tname where c1 >= 50000 and c1 <= 40000;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 <= 40000 and c1 >= 50000;
+             QUERY PLAN              
+-------------------------------------
+ Result
+   One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select * from :tname where c1 <= 40000 and c1 >= 50000;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 >= 50000 and c1 < 50000;
+             QUERY PLAN              
+-------------------------------------
+ Result
+   One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select * from :tname where c1 >= 50000 and c1 < 50000;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- mismatch: conflict conditions
+:explain
+select * from :tname where c1 > 50000 and c1 <= 50000;
+             QUERY PLAN              
+-------------------------------------
+ Result
+   One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select * from :tname where c1 > 50000 and c1 <= 50000;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- NE
+-- match
+:explain
+select * from :tname where c1 <> 50010 and c1 > 50000 and c1 < 50040;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_6_c1_c11_idx on t_data_1_prt_6
+         Index Cond: ((c1 > 50000) AND (c1 < 50040))
+         Filter: (c1 <> 50010)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 <> 50010 and c1 > 50000 and c1 < 50040;
+  c1   |  c2   
+-------+-------
+ 50020 | 50020
+ 50020 | 50021
+ 50020 | 50022
+ 50020 | 50023
+ 50020 | 50024
+ 50020 | 50025
+ 50020 | 50026
+ 50020 | 50027
+ 50020 | 50028
+ 50020 | 50029
+(10 rows)
+
+-- match
+:explain
+select * from :tname where c1 > 50000 and c1 < 50040 and c2 <> 50025;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather Motion 2:1  (slice1; segments: 2)
+   ->  Parallel Index Scan using t_data_1_prt_6_c1_c11_idx on t_data_1_prt_6
+         Index Cond: ((c1 > 50000) AND (c1 < 50040))
+         Filter: (c2 <> 50025)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from :tname where c1 > 50000 and c1 < 50040 and c2 <> 50025;
+  c1   |  c2   
+-------+-------
+ 50020 | 50020
+ 50020 | 50021
+ 50020 | 50022
+ 50020 | 50023
+ 50020 | 50024
+ 50020 | 50026
+ 50020 | 50027
+ 50020 | 50028
+ 50020 | 50029
+(9 rows)
+

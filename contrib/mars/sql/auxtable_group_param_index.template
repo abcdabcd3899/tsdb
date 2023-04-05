@@ -1,0 +1,15 @@
+\out /dev/null
+select aux_index.aux_index_oid, aux_index.aux_index_name
+  from(
+    select indexrelid as aux_index_oid,
+           indexrelid::regclass::name as aux_index_name
+      from pg_index where indrelid = :aux_table_oid
+  ) as aux_index where aux_index.aux_index_name like '%idx4%';
+\out
+
+\gset
+\set aux_index_name_str '''' :aux_index_name ''''
+
+-- verify the index keys
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_index_oid;

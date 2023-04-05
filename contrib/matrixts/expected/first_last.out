@@ -1,0 +1,927 @@
+--
+-- Test the optimizations for first(), last(), min(), max(), they should be
+-- converted to subqueries like "select * from t1 order by c1 limit 1".
+--
+-- start_ignore
+drop schema if exists test_first_last;
+create extension if not exists gp_debug_numsegments;
+-- end_ignore
+-- we care about the plans
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+create schema test_first_last;
+set search_path to test_first_last,public;
+create table t1 (c1 int, c2 int) distributed by (c1);
+insert into t1 select i, i*2 from generate_series(1, 1000) i;
+set enable_indexscan to on;
+set enable_indexonlyscan to off;
+set matrix.disable_optimizations to off;
+--
+-- cannot optimize w/o an index
+--
+\i sql/first_last.template
+-- positive: with any of the 4 aggs
+explain (costs off)
+select first(c2, c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1) from t1;
+ first 
+-------
+     2
+(1 row)
+
+explain (costs off)
+select last(c2, c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select last(c2, c1) from t1;
+ last 
+------
+ 2000
+(1 row)
+
+explain (costs off)
+select min(c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select min(c1) from t1;
+ min 
+-----
+   1
+(1 row)
+
+explain (costs off)
+select max(c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select max(c1) from t1;
+ max  
+------
+ 1000
+(1 row)
+
+-- positive: with combination of them
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+  from t1;
+ first | last 
+-------+------
+     2 | 2000
+(1 row)
+
+explain (costs off)
+select min(c1)
+     , max(c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select min(c1)
+     , max(c1)
+  from t1;
+ min | max  
+-----+------
+   1 | 1000
+(1 row)
+
+-- negative: a limitation, mixing first()/last() and min()/max() is unsupported
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+     , min(c1)
+     , max(c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+     , min(c1)
+     , max(c1)
+  from t1;
+ first | last | min | max  
+-------+------+-----+------
+     2 | 2000 |   1 | 1000
+(1 row)
+
+-- positive: but we could simulate min()/max() with first()/last()
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+     , first(c1, c1) as min
+     , last(c1, c1) as max
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+     , first(c1, c1) as min
+     , last(c1, c1) as max
+  from t1;
+ first | last | min | max  
+-------+------+-----+------
+     2 | 2000 |   1 | 1000
+(1 row)
+
+-- negative: mix with other aggs
+explain (costs off)
+select first(c2, c1)
+     , count(c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , count(c1)
+  from t1;
+ first | count 
+-------+-------
+     2 |  1000
+(1 row)
+
+-- negative: mix with the 4 aggs, but on non-order columns
+explain (costs off)
+select first(c2, c1)
+     , min(c2)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , min(c2)
+  from t1;
+ first | min 
+-------+-----
+     2 |   2
+(1 row)
+
+--
+-- cannot optimize w/o a btree index
+--
+create index t1_idx on t1 using brin (c1);
+\i sql/first_last.template
+-- positive: with any of the 4 aggs
+explain (costs off)
+select first(c2, c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1) from t1;
+ first 
+-------
+     2
+(1 row)
+
+explain (costs off)
+select last(c2, c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select last(c2, c1) from t1;
+ last 
+------
+ 2000
+(1 row)
+
+explain (costs off)
+select min(c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select min(c1) from t1;
+ min 
+-----
+   1
+(1 row)
+
+explain (costs off)
+select max(c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select max(c1) from t1;
+ max  
+------
+ 1000
+(1 row)
+
+-- positive: with combination of them
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+  from t1;
+ first | last 
+-------+------
+     2 | 2000
+(1 row)
+
+explain (costs off)
+select min(c1)
+     , max(c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select min(c1)
+     , max(c1)
+  from t1;
+ min | max  
+-----+------
+   1 | 1000
+(1 row)
+
+-- negative: a limitation, mixing first()/last() and min()/max() is unsupported
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+     , min(c1)
+     , max(c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+     , min(c1)
+     , max(c1)
+  from t1;
+ first | last | min | max  
+-------+------+-----+------
+     2 | 2000 |   1 | 1000
+(1 row)
+
+-- positive: but we could simulate min()/max() with first()/last()
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+     , first(c1, c1) as min
+     , last(c1, c1) as max
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+     , first(c1, c1) as min
+     , last(c1, c1) as max
+  from t1;
+ first | last | min | max  
+-------+------+-----+------
+     2 | 2000 |   1 | 1000
+(1 row)
+
+-- negative: mix with other aggs
+explain (costs off)
+select first(c2, c1)
+     , count(c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , count(c1)
+  from t1;
+ first | count 
+-------+-------
+     2 |  1000
+(1 row)
+
+-- negative: mix with the 4 aggs, but on non-order columns
+explain (costs off)
+select first(c2, c1)
+     , min(c2)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , min(c2)
+  from t1;
+ first | min 
+-------+-----
+     2 |   2
+(1 row)
+
+drop index t1_idx;
+--
+-- cannot optimize w/o a proper btree index
+--
+create index t1_idx on t1 using btree (c2);
+\i sql/first_last.template
+-- positive: with any of the 4 aggs
+explain (costs off)
+select first(c2, c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1) from t1;
+ first 
+-------
+     2
+(1 row)
+
+explain (costs off)
+select last(c2, c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select last(c2, c1) from t1;
+ last 
+------
+ 2000
+(1 row)
+
+explain (costs off)
+select min(c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select min(c1) from t1;
+ min 
+-----
+   1
+(1 row)
+
+explain (costs off)
+select max(c1) from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select max(c1) from t1;
+ max  
+------
+ 1000
+(1 row)
+
+-- positive: with combination of them
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+  from t1;
+ first | last 
+-------+------
+     2 | 2000
+(1 row)
+
+explain (costs off)
+select min(c1)
+     , max(c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select min(c1)
+     , max(c1)
+  from t1;
+ min | max  
+-----+------
+   1 | 1000
+(1 row)
+
+-- negative: a limitation, mixing first()/last() and min()/max() is unsupported
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+     , min(c1)
+     , max(c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+     , min(c1)
+     , max(c1)
+  from t1;
+ first | last | min | max  
+-------+------+-----+------
+     2 | 2000 |   1 | 1000
+(1 row)
+
+-- positive: but we could simulate min()/max() with first()/last()
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+     , first(c1, c1) as min
+     , last(c1, c1) as max
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+     , first(c1, c1) as min
+     , last(c1, c1) as max
+  from t1;
+ first | last | min | max  
+-------+------+-----+------
+     2 | 2000 |   1 | 1000
+(1 row)
+
+-- negative: mix with other aggs
+explain (costs off)
+select first(c2, c1)
+     , count(c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , count(c1)
+  from t1;
+ first | count 
+-------+-------
+     2 |  1000
+(1 row)
+
+-- negative: mix with the 4 aggs, but on non-order columns
+explain (costs off)
+select first(c2, c1)
+     , min(c2)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , min(c2)
+  from t1;
+ first | min 
+-------+-----
+     2 |   2
+(1 row)
+
+drop index t1_idx;
+--
+-- can optimize w/ a proper btree index
+--
+create index t1_idx on t1 using btree (c1);
+\i sql/first_last.template
+-- positive: with any of the 4 aggs
+explain (costs off)
+select first(c2, c1) from t1;
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Result
+   InitPlan 1 (returns $0)  (slice1)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice2; segments: 1)
+                 Merge Key: t1.c1
+                 ->  Index Scan using t1_idx on t1
+                       Index Cond: (c1 IS NOT NULL)
+ Optimizer: Postgres query optimizer
+(8 rows)
+
+select first(c2, c1) from t1;
+ first 
+-------
+     2
+(1 row)
+
+explain (costs off)
+select last(c2, c1) from t1;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Result
+   InitPlan 1 (returns $0)  (slice1)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice2; segments: 1)
+                 Merge Key: t1.c1
+                 ->  Index Scan Backward using t1_idx on t1
+                       Index Cond: (c1 IS NOT NULL)
+ Optimizer: Postgres query optimizer
+(8 rows)
+
+select last(c2, c1) from t1;
+ last 
+------
+ 2000
+(1 row)
+
+explain (costs off)
+select min(c1) from t1;
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Result
+   InitPlan 1 (returns $0)  (slice1)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice2; segments: 1)
+                 Merge Key: t1.c1
+                 ->  Index Scan using t1_idx on t1
+                       Index Cond: (c1 IS NOT NULL)
+ Optimizer: Postgres query optimizer
+(8 rows)
+
+select min(c1) from t1;
+ min 
+-----
+   1
+(1 row)
+
+explain (costs off)
+select max(c1) from t1;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Result
+   InitPlan 1 (returns $0)  (slice1)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice2; segments: 1)
+                 Merge Key: t1.c1
+                 ->  Index Scan Backward using t1_idx on t1
+                       Index Cond: (c1 IS NOT NULL)
+ Optimizer: Postgres query optimizer
+(8 rows)
+
+select max(c1) from t1;
+ max  
+------
+ 1000
+(1 row)
+
+-- positive: with combination of them
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+  from t1;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Result
+   InitPlan 1 (returns $1)  (slice1)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice2; segments: 1)
+                 Merge Key: t1.c1
+                 ->  Index Scan Backward using t1_idx on t1
+                       Index Cond: (c1 IS NOT NULL)
+   InitPlan 2 (returns $0)  (slice3)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice4; segments: 1)
+                 Merge Key: t1_1.c1
+                 ->  Index Scan using t1_idx on t1 t1_1
+                       Index Cond: (c1 IS NOT NULL)
+ Optimizer: Postgres query optimizer
+(14 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+  from t1;
+ first | last 
+-------+------
+     2 | 2000
+(1 row)
+
+explain (costs off)
+select min(c1)
+     , max(c1)
+  from t1;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Result
+   InitPlan 1 (returns $0)  (slice1)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice2; segments: 1)
+                 Merge Key: t1.c1
+                 ->  Index Scan using t1_idx on t1
+                       Index Cond: (c1 IS NOT NULL)
+   InitPlan 2 (returns $1)  (slice3)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice4; segments: 1)
+                 Merge Key: t1_1.c1
+                 ->  Index Scan Backward using t1_idx on t1 t1_1
+                       Index Cond: (c1 IS NOT NULL)
+ Optimizer: Postgres query optimizer
+(14 rows)
+
+select min(c1)
+     , max(c1)
+  from t1;
+ min | max  
+-----+------
+   1 | 1000
+(1 row)
+
+-- negative: a limitation, mixing first()/last() and min()/max() is unsupported
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+     , min(c1)
+     , max(c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+     , min(c1)
+     , max(c1)
+  from t1;
+ first | last | min | max  
+-------+------+-----+------
+     2 | 2000 |   1 | 1000
+(1 row)
+
+-- positive: but we could simulate min()/max() with first()/last()
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+     , first(c1, c1) as min
+     , last(c1, c1) as max
+  from t1;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Result
+   InitPlan 1 (returns $3)  (slice1)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice2; segments: 1)
+                 Merge Key: t1.c1
+                 ->  Index Scan Backward using t1_idx on t1
+                       Index Cond: (c1 IS NOT NULL)
+   InitPlan 2 (returns $2)  (slice3)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice4; segments: 1)
+                 Merge Key: t1_1.c1
+                 ->  Index Scan using t1_idx on t1 t1_1
+                       Index Cond: (c1 IS NOT NULL)
+   InitPlan 3 (returns $1)  (slice5)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice6; segments: 1)
+                 Merge Key: t1_2.c1
+                 ->  Index Scan Backward using t1_idx on t1 t1_2
+                       Index Cond: (c1 IS NOT NULL)
+   InitPlan 4 (returns $0)  (slice7)
+     ->  Limit
+           ->  Gather Motion 1:1  (slice8; segments: 1)
+                 Merge Key: t1_3.c1
+                 ->  Index Scan using t1_idx on t1 t1_3
+                       Index Cond: (c1 IS NOT NULL)
+ Optimizer: Postgres query optimizer
+(26 rows)
+
+select first(c2, c1)
+     , last(c2, c1)
+     , first(c1, c1) as min
+     , last(c1, c1) as max
+  from t1;
+ first | last | min | max  
+-------+------+-----+------
+     2 | 2000 |   1 | 1000
+(1 row)
+
+-- negative: mix with other aggs
+explain (costs off)
+select first(c2, c1)
+     , count(c1)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , count(c1)
+  from t1;
+ first | count 
+-------+-------
+     2 |  1000
+(1 row)
+
+-- negative: mix with the 4 aggs, but on non-order columns
+explain (costs off)
+select first(c2, c1)
+     , min(c2)
+  from t1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Partial Aggregate
+               ->  Seq Scan on t1
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select first(c2, c1)
+     , min(c2)
+  from t1;
+ first | min 
+-------+-----
+     2 |   2
+(1 row)
+
+drop index t1_idx;

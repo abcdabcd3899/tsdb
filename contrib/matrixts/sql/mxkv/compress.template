@@ -1,0 +1,24 @@
+\set kvtypestr '''' :kvtype ''''
+select replace(rtrim(:kvtypestr, ')'),
+               '(', '_') as kvtypestr;
+\gset
+
+\set tname 'test_mxkv_compress_' :fulltype '_' :datatype '_' :kvtypestr '_' :compresstype
+\set tnamestr '''' :tname ''''
+
+\set column :fulltype '_records_' :datatype
+
+-- create the table
+drop table if exists :tname;
+create table :tname (kv :kvtype encoding (compresstype=:compresstype,
+                                          compresslevel=:compresslevel))
+ using ao_column
+ distributed randomly;
+
+-- insert the data
+insert into :tname
+select trim(both '''' from :column):::kvtype
+  from test_mxkv_settings
+     , generate_series(1, :nrows);
+
+-- vi: filetype=sql et :

@@ -1,0 +1,399 @@
+--
+-- pushdown of first() and last() aggs.
+--
+-- start_ignore
+create extension if not exists gp_debug_numsegments;
+create extension if not exists mars;
+create extension if not exists matrixts;
+-- end_ignore
+\set tname test_mars_customscan_first_last_t1
+drop table if exists :tname;
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+create table :tname ( tag int
+                    , ts timestamp
+                    , i4 int4
+                    , i8 int8
+                    , f4 float4
+                    , f8 float8
+                    )
+       using mars
+        with ( group_col_ = "{tag}"
+             , group_param_col_ = "{ts in 1 day}"
+             )
+ distributed by (tag)
+;
+select gp_debug_reset_create_table_default_numsegments();
+ gp_debug_reset_create_table_default_numsegments 
+-------------------------------------------------
+ 
+(1 row)
+
+insert into :tname
+     select i / 10000 as tag
+          , '2000-01-01'::timestamp + (i % 10000)::text::interval as ts
+          , i as i4
+          , -i as i8
+          , i / 10. as f4
+          , -i / 10. as f8
+       from generate_series(0, 99999) i
+;
+-- simulate min()/max() with first()/last().
+explain (costs off)
+select min  (tag     ) as tag_min
+     , max  (tag     ) as tag_max
+     , first(tag, tag) as tag_first
+     , last (tag, tag) as tag_last
+     , min  ( ts     ) as ts_min
+     , max  ( ts     ) as ts_max
+     , first( ts,  ts) as ts_first
+     , last ( ts,  ts) as ts_last
+     , min  ( i4     ) as i4_min
+     , max  ( i4     ) as i4_max
+     , first( i4,  i4) as i4_first
+     , last ( i4,  i4) as i4_last
+     , min  ( i8     ) as i8_min
+     , max  ( i8     ) as i8_max
+     , first( i8,  i8) as i8_first
+     , last ( i8,  i8) as i8_last
+     , min  ( f4     ) as f4_min
+     , max  ( f4     ) as f4_max
+     , first( f4,  f4) as f4_first
+     , last ( f4,  f4) as f4_last
+     , min  ( f8     ) as f8_min
+     , max  ( f8     ) as f8_max
+     , first( f8,  f8) as f8_first
+     , last ( f8,  f8) as f8_last
+  from :tname
+;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 1:1  (slice1; segments: 1)
+         ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(4 rows)
+
+\x on
+select min  (tag     ) as tag_min
+     , max  (tag     ) as tag_max
+     , first(tag, tag) as tag_first
+     , last (tag, tag) as tag_last
+     , min  ( ts     ) as ts_min
+     , max  ( ts     ) as ts_max
+     , first( ts,  ts) as ts_first
+     , last ( ts,  ts) as ts_last
+     , min  ( i4     ) as i4_min
+     , max  ( i4     ) as i4_max
+     , first( i4,  i4) as i4_first
+     , last ( i4,  i4) as i4_last
+     , min  ( i8     ) as i8_min
+     , max  ( i8     ) as i8_max
+     , first( i8,  i8) as i8_first
+     , last ( i8,  i8) as i8_last
+     , min  ( f4     ) as f4_min
+     , max  ( f4     ) as f4_max
+     , first( f4,  f4) as f4_first
+     , last ( f4,  f4) as f4_last
+     , min  ( f8     ) as f8_min
+     , max  ( f8     ) as f8_max
+     , first( f8,  f8) as f8_first
+     , last ( f8,  f8) as f8_last
+  from :tname
+;
+-[ RECORD 1 ]-----------------------
+tag_min   | 0
+tag_max   | 9
+tag_first | 0
+tag_last  | 9
+ts_min    | Sat Jan 01 00:00:00 2000
+ts_max    | Sat Jan 01 02:46:39 2000
+ts_first  | Sat Jan 01 00:00:00 2000
+ts_last   | Sat Jan 01 02:46:39 2000
+i4_min    | 0
+i4_max    | 99999
+i4_first  | 0
+i4_last   | 99999
+i8_min    | -99999
+i8_max    | 0
+i8_first  | -99999
+i8_last   | 0
+f4_min    | 0
+f4_max    | 9999.9
+f4_first  | 0
+f4_last   | 9999.9
+f8_min    | -9999.9
+f8_max    | 0
+f8_first  | -9999.9
+f8_last   | 0
+
+\x off
+\set col ts
+\i sql/first_last.template
+-- first() / last() on kinds of column types
+explain (costs off)
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;
+                QUERY PLAN                
+------------------------------------------
+ Gather Motion 1:1  (slice1; segments: 1)
+   ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;
+ tag |         ts_first         |         ts_last          | i4_first | i4_last | i8_first | i8_last | f4_first | f4_last | f8_first | f8_last 
+-----+--------------------------+--------------------------+----------+---------+----------+---------+----------+---------+----------+---------
+   0 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |        0 |    9999 |        0 |   -9999 |        0 |   999.9 |        0 |  -999.9
+   1 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    10000 |   19999 |   -10000 |  -19999 |     1000 |  1999.9 |    -1000 | -1999.9
+   2 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    20000 |   29999 |   -20000 |  -29999 |     2000 |  2999.9 |    -2000 | -2999.9
+   3 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    30000 |   39999 |   -30000 |  -39999 |     3000 |  3999.9 |    -3000 | -3999.9
+   4 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    40000 |   49999 |   -40000 |  -49999 |     4000 |  4999.9 |    -4000 | -4999.9
+   5 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    50000 |   59999 |   -50000 |  -59999 |     5000 |  5999.9 |    -5000 | -5999.9
+   6 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    60000 |   69999 |   -60000 |  -69999 |     6000 |  6999.9 |    -6000 | -6999.9
+   7 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    70000 |   79999 |   -70000 |  -79999 |     7000 |  7999.9 |    -7000 | -7999.9
+   8 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    80000 |   89999 |   -80000 |  -89999 |     8000 |  8999.9 |    -8000 | -8999.9
+   9 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    90000 |   99999 |   -90000 |  -99999 |     9000 |  9999.9 |    -9000 | -9999.9
+(10 rows)
+
+\set col i4
+\i sql/first_last.template
+-- first() / last() on kinds of column types
+explain (costs off)
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;
+                QUERY PLAN                
+------------------------------------------
+ Gather Motion 1:1  (slice1; segments: 1)
+   ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;
+ tag |         ts_first         |         ts_last          | i4_first | i4_last | i8_first | i8_last | f4_first | f4_last | f8_first | f8_last 
+-----+--------------------------+--------------------------+----------+---------+----------+---------+----------+---------+----------+---------
+   0 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |        0 |    9999 |        0 |   -9999 |        0 |   999.9 |        0 |  -999.9
+   1 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    10000 |   19999 |   -10000 |  -19999 |     1000 |  1999.9 |    -1000 | -1999.9
+   2 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    20000 |   29999 |   -20000 |  -29999 |     2000 |  2999.9 |    -2000 | -2999.9
+   3 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    30000 |   39999 |   -30000 |  -39999 |     3000 |  3999.9 |    -3000 | -3999.9
+   4 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    40000 |   49999 |   -40000 |  -49999 |     4000 |  4999.9 |    -4000 | -4999.9
+   5 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    50000 |   59999 |   -50000 |  -59999 |     5000 |  5999.9 |    -5000 | -5999.9
+   6 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    60000 |   69999 |   -60000 |  -69999 |     6000 |  6999.9 |    -6000 | -6999.9
+   7 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    70000 |   79999 |   -70000 |  -79999 |     7000 |  7999.9 |    -7000 | -7999.9
+   8 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    80000 |   89999 |   -80000 |  -89999 |     8000 |  8999.9 |    -8000 | -8999.9
+   9 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    90000 |   99999 |   -90000 |  -99999 |     9000 |  9999.9 |    -9000 | -9999.9
+(10 rows)
+
+\set col i8
+\i sql/first_last.template
+-- first() / last() on kinds of column types
+explain (costs off)
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;
+                QUERY PLAN                
+------------------------------------------
+ Gather Motion 1:1  (slice1; segments: 1)
+   ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;
+ tag |         ts_first         |         ts_last          | i4_first | i4_last | i8_first | i8_last | f4_first | f4_last | f8_first | f8_last 
+-----+--------------------------+--------------------------+----------+---------+----------+---------+----------+---------+----------+---------
+   0 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |     9999 |       0 |    -9999 |       0 |    999.9 |       0 |   -999.9 |       0
+   1 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    19999 |   10000 |   -19999 |  -10000 |   1999.9 |    1000 |  -1999.9 |   -1000
+   2 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    29999 |   20000 |   -29999 |  -20000 |   2999.9 |    2000 |  -2999.9 |   -2000
+   3 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    39999 |   30000 |   -39999 |  -30000 |   3999.9 |    3000 |  -3999.9 |   -3000
+   4 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    49999 |   40000 |   -49999 |  -40000 |   4999.9 |    4000 |  -4999.9 |   -4000
+   5 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    59999 |   50000 |   -59999 |  -50000 |   5999.9 |    5000 |  -5999.9 |   -5000
+   6 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    69999 |   60000 |   -69999 |  -60000 |   6999.9 |    6000 |  -6999.9 |   -6000
+   7 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    79999 |   70000 |   -79999 |  -70000 |   7999.9 |    7000 |  -7999.9 |   -7000
+   8 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    89999 |   80000 |   -89999 |  -80000 |   8999.9 |    8000 |  -8999.9 |   -8000
+   9 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    99999 |   90000 |   -99999 |  -90000 |   9999.9 |    9000 |  -9999.9 |   -9000
+(10 rows)
+
+\set col f4
+\i sql/first_last.template
+-- first() / last() on kinds of column types
+explain (costs off)
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;
+                QUERY PLAN                
+------------------------------------------
+ Gather Motion 1:1  (slice1; segments: 1)
+   ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;
+ tag |         ts_first         |         ts_last          | i4_first | i4_last | i8_first | i8_last | f4_first | f4_last | f8_first | f8_last 
+-----+--------------------------+--------------------------+----------+---------+----------+---------+----------+---------+----------+---------
+   0 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |        0 |    9999 |        0 |   -9999 |        0 |   999.9 |        0 |  -999.9
+   1 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    10000 |   19999 |   -10000 |  -19999 |     1000 |  1999.9 |    -1000 | -1999.9
+   2 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    20000 |   29999 |   -20000 |  -29999 |     2000 |  2999.9 |    -2000 | -2999.9
+   3 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    30000 |   39999 |   -30000 |  -39999 |     3000 |  3999.9 |    -3000 | -3999.9
+   4 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    40000 |   49999 |   -40000 |  -49999 |     4000 |  4999.9 |    -4000 | -4999.9
+   5 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    50000 |   59999 |   -50000 |  -59999 |     5000 |  5999.9 |    -5000 | -5999.9
+   6 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    60000 |   69999 |   -60000 |  -69999 |     6000 |  6999.9 |    -6000 | -6999.9
+   7 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    70000 |   79999 |   -70000 |  -79999 |     7000 |  7999.9 |    -7000 | -7999.9
+   8 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    80000 |   89999 |   -80000 |  -89999 |     8000 |  8999.9 |    -8000 | -8999.9
+   9 | Sat Jan 01 00:00:00 2000 | Sat Jan 01 02:46:39 2000 |    90000 |   99999 |   -90000 |  -99999 |     9000 |  9999.9 |    -9000 | -9999.9
+(10 rows)
+
+\set col f8
+\i sql/first_last.template
+-- first() / last() on kinds of column types
+explain (costs off)
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;
+                QUERY PLAN                
+------------------------------------------
+ Gather Motion 1:1  (slice1; segments: 1)
+   ->  Custom Scan (MarsAggScan)
+ Optimizer: Postgres query optimizer
+(3 rows)
+
+select tag
+     , first( ts, :col) as ts_first
+     , last ( ts, :col) as ts_last
+     , first( i4, :col) as i4_first
+     , last ( i4, :col) as i4_last
+     , first( i8, :col) as i8_first
+     , last ( i8, :col) as i8_last
+     , first( f4, :col) as f4_first
+     , last ( f4, :col) as f4_last
+     , first( f8, :col) as f8_first
+     , last ( f8, :col) as f8_last
+  from :tname
+ group by tag
+;
+ tag |         ts_first         |         ts_last          | i4_first | i4_last | i8_first | i8_last | f4_first | f4_last | f8_first | f8_last 
+-----+--------------------------+--------------------------+----------+---------+----------+---------+----------+---------+----------+---------
+   0 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |     9999 |       0 |    -9999 |       0 |    999.9 |       0 |   -999.9 |       0
+   1 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    19999 |   10000 |   -19999 |  -10000 |   1999.9 |    1000 |  -1999.9 |   -1000
+   2 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    29999 |   20000 |   -29999 |  -20000 |   2999.9 |    2000 |  -2999.9 |   -2000
+   3 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    39999 |   30000 |   -39999 |  -30000 |   3999.9 |    3000 |  -3999.9 |   -3000
+   4 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    49999 |   40000 |   -49999 |  -40000 |   4999.9 |    4000 |  -4999.9 |   -4000
+   5 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    59999 |   50000 |   -59999 |  -50000 |   5999.9 |    5000 |  -5999.9 |   -5000
+   6 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    69999 |   60000 |   -69999 |  -60000 |   6999.9 |    6000 |  -6999.9 |   -6000
+   7 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    79999 |   70000 |   -79999 |  -70000 |   7999.9 |    7000 |  -7999.9 |   -7000
+   8 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    89999 |   80000 |   -89999 |  -80000 |   8999.9 |    8000 |  -8999.9 |   -8000
+   9 | Sat Jan 01 02:46:39 2000 | Sat Jan 01 00:00:00 2000 |    99999 |   90000 |   -99999 |  -90000 |   9999.9 |    9000 |  -9999.9 |   -9000
+(10 rows)
+

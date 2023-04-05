@@ -1,0 +1,227 @@
+\c matrixmgr
+SELECT mxmgr_create_metastore('test_mgr');
+ mxmgr_create_metastore 
+------------------------
+ t
+(1 row)
+
+SELECT tablename FROM pg_catalog.pg_tables WHERE  schemaname = 'test_mgr';
+       tablename       
+-----------------------
+ system
+ matrix_manager_config
+(2 rows)
+
+SELECT table_name,column_name FROM information_schema.columns WHERE table_schema = 'test_mgr';
+      table_name       | column_name 
+-----------------------+-------------
+ system                | tagattr
+ system                | metrics
+ seg_disk_usage        | free_bytes
+ seg_disk_usage        | total_bytes
+ master_disk_usage     | free_bytes
+ master_disk_usage     | total_bytes
+ segdetails            | ts
+ system                | ts
+ seg_disk_usage        | time
+ master_disk_usage     | time
+ segdetails            | id
+ matrix_manager_config | category
+ matrix_manager_config | key
+ matrix_manager_config | value
+ matrix_manager_config | desc
+ segstate              | state
+ segdetails            | state
+ os_uptime             | uptime
+ system                | category
+ system                | host
+ system                | device
+(21 rows)
+
+SELECT viewname, definition FROM pg_catalog.pg_views WHERE  schemaname = 'test_mgr';
+     viewname      |                                                                                   definition                                                                                    
+-------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ os_uptime         |  WITH master_sys(metrics, ts) AS (                                                                                                                                             +
+                   |          SELECT s.metrics,                                                                                                                                                     +
+                   |             s.ts                                                                                                                                                               +
+                   |            FROM (gp_segment_configuration gs                                                                                                                                   +
+                   |              JOIN test_mgr.system s ON ((gs.hostname = s.host)))                                                                                                               +
+                   |           WHERE ((s.category = 'system'::name) AND (gs.content = '-1'::integer) AND (gs.role = 'p'::"char") AND (s.ts > (timezone('UTC'::text, now()) - '@ 5 mins'::interval)))+
+                   |         )                                                                                                                                                                      +
+                   |  SELECT ((last(master_sys.metrics, master_sys.ts) ->> 'uptime'::text))::bigint AS uptime                                                                                       +
+                   |    FROM master_sys;
+ segstate          |  WITH rsync_state(segid, state) AS (                                                                                                                                           +
+                   |          SELECT gp_id.gp_segment_id AS segid,                                                                                                                                  +
+                   |             (pg_stat_get_wal_senders()).state AS state                                                                                                                         +
+                   |            FROM gp_dist_random('gp_id')                                                                                                                                        +
+                   |         UNION ALL                                                                                                                                                              +
+                   |          SELECT '-1'::integer,                                                                                                                                                 +
+                   |             pg_stat_replication.state                                                                                                                                          +
+                   |            FROM pg_stat_replication                                                                                                                                            +
+                   |         ), counters(u, d, b, r, p, m, s) AS (                                                                                                                                  +
+                   |          SELECT sum(                                                                                                                                                           +
+                   |                 CASE                                                                                                                                                           +
+                   |                     WHEN (g.status = 'u'::"char") THEN 1                                                                                                                       +
+                   |                     ELSE 0                                                                                                                                                     +
+                   |                 END) AS up,                                                                                                                                                    +
+                   |             sum(                                                                                                                                                               +
+                   |                 CASE                                                                                                                                                           +
+                   |                     WHEN (g.status <> 'u'::"char") THEN 1                                                                                                                      +
+                   |                     ELSE 0                                                                                                                                                     +
+                   |                 END) AS down,                                                                                                                                                  +
+                   |             sum(                                                                                                                                                               +
+                   |                 CASE                                                                                                                                                           +
+                   |                     WHEN (g.role <> g.preferred_role) THEN 1                                                                                                                   +
+                   |                     ELSE 0                                                                                                                                                     +
+                   |                 END) AS unbalanced,                                                                                                                                            +
+                   |             sum(                                                                                                                                                               +
+                   |                 CASE                                                                                                                                                           +
+                   |                     WHEN (r.state = 'catchup'::text) THEN 1                                                                                                                    +
+                   |                     ELSE 0                                                                                                                                                     +
+                   |                 END) AS rsyncing,                                                                                                                                              +
+                   |             sum(                                                                                                                                                               +
+                   |                 CASE                                                                                                                                                           +
+                   |                     WHEN ((g.content >= 0) AND (g.preferred_role = 'p'::"char")) THEN 1                                                                                        +
+                   |                     ELSE 0                                                                                                                                                     +
+                   |                 END) AS primarys,                                                                                                                                              +
+                   |             sum(                                                                                                                                                               +
+                   |                 CASE                                                                                                                                                           +
+                   |                     WHEN ((g.content >= 0) AND (g.preferred_role = 'p'::"char") AND (r.segid IS NOT NULL)) THEN 1                                                              +
+                   |                     ELSE 0                                                                                                                                                     +
+                   |                 END) AS mirrored_primarys,                                                                                                                                     +
+                   |             sum(                                                                                                                                                               +
+                   |                 CASE                                                                                                                                                           +
+                   |                     WHEN ((g.content < 0) AND (g.preferred_role = 'm'::"char")) THEN 1                                                                                         +
+                   |                     ELSE 0                                                                                                                                                     +
+                   |                 END) AS standby                                                                                                                                                +
+                   |            FROM (gp_segment_configuration g                                                                                                                                    +
+                   |              LEFT JOIN rsync_state r ON (((g.content = r.segid) AND (g.preferred_role = 'p'::"char"))))                                                                        +
+                   |         )                                                                                                                                                                      +
+                   |  SELECT                                                                                                                                                                        +
+                   |         CASE                                                                                                                                                                   +
+                   |             WHEN (counters.d > 0) THEN 20                                                                                                                                      +
+                   |             WHEN (counters.r > 0) THEN 11                                                                                                                                      +
+                   |             WHEN (counters.b > 0) THEN 10                                                                                                                                      +
+                   |             WHEN (counters.s <= 0) THEN 1                                                                                                                                      +
+                   |             WHEN ((counters.p > counters.m) OR (counters.m = 0)) THEN 2                                                                                                        +
+                   |             WHEN (counters.p <= 0) THEN 12                                                                                                                                     +
+                   |             ELSE 0                                                                                                                                                             +
+                   |         END AS state                                                                                                                                                           +
+                   |    FROM counters;
+ segdetails        |  WITH rsync_state(segid, state) AS (                                                                                                                                           +
+                   |          SELECT gp_id.gp_segment_id AS segid,                                                                                                                                  +
+                   |             (pg_stat_get_wal_senders()).state AS state                                                                                                                         +
+                   |            FROM gp_dist_random('gp_id')                                                                                                                                        +
+                   |         UNION ALL                                                                                                                                                              +
+                   |          SELECT '-1'::integer,                                                                                                                                                 +
+                   |             pg_stat_replication.state                                                                                                                                          +
+                   |            FROM pg_stat_replication                                                                                                                                            +
+                   |         )                                                                                                                                                                      +
+                   |  SELECT now() AS ts,                                                                                                                                                           +
+                   |         CASE                                                                                                                                                                   +
+                   |             WHEN (g.content < 0) THEN                                                                                                                                          +
+                   |             CASE                                                                                                                                                               +
+                   |                 WHEN (g.preferred_role = 'p'::"char") THEN 'Master'::text                                                                                                      +
+                   |                 ELSE 'Standby'::text                                                                                                                                           +
+                   |             END                                                                                                                                                                +
+                   |             ELSE                                                                                                                                                               +
+                   |             CASE                                                                                                                                                               +
+                   |                 WHEN (g.preferred_role = 'p'::"char") THEN ('Primary'::text || g.content)                                                                                      +
+                   |                 ELSE ('Mirror'::text || g.content)                                                                                                                             +
+                   |             END                                                                                                                                                                +
+                   |         END AS id,                                                                                                                                                             +
+                   |         CASE                                                                                                                                                                   +
+                   |             WHEN (g.status <> 'u'::"char") THEN 20                                                                                                                             +
+                   |             WHEN (r.state = 'catchup'::text) THEN 11                                                                                                                           +
+                   |             WHEN (g.role <> g.preferred_role) THEN 10                                                                                                                          +
+                   |             ELSE 0                                                                                                                                                             +
+                   |         END AS state                                                                                                                                                           +
+                   |    FROM (gp_segment_configuration g                                                                                                                                            +
+                   |      LEFT JOIN rsync_state r ON (((g.content = r.segid) AND (g.preferred_role = 'p'::"char"))))                                                                                +
+                   |   ORDER BY g.content,                                                                                                                                                          +
+                   |         CASE                                                                                                                                                                   +
+                   |             WHEN (g.preferred_role = 'p'::"char") THEN 0                                                                                                                       +
+                   |             ELSE 1                                                                                                                                                             +
+                   |         END;
+ seg_disk_usage    |  WITH seg(host, kind) AS (                                                                                                                                                     +
+                   |          SELECT gp_segment_configuration.hostname,                                                                                                                             +
+                   |                 CASE                                                                                                                                                           +
+                   |                     WHEN (gp_segment_configuration.content < 0) THEN                                                                                                           +
+                   |                     CASE                                                                                                                                                       +
+                   |                         WHEN (gp_segment_configuration.preferred_role = 'p'::"char") THEN 0                                                                                    +
+                   |                         ELSE 2                                                                                                                                                 +
+                   |                     END                                                                                                                                                        +
+                   |                     ELSE 1                                                                                                                                                     +
+                   |                 END AS "case"                                                                                                                                                  +
+                   |            FROM gp_segment_configuration                                                                                                                                       +
+                   |           GROUP BY gp_segment_configuration.hostname,                                                                                                                          +
+                   |                 CASE                                                                                                                                                           +
+                   |                     WHEN (gp_segment_configuration.content < 0) THEN                                                                                                           +
+                   |                     CASE                                                                                                                                                       +
+                   |                         WHEN (gp_segment_configuration.preferred_role = 'p'::"char") THEN 0                                                                                    +
+                   |                         ELSE 2                                                                                                                                                 +
+                   |                     END                                                                                                                                                        +
+                   |                     ELSE 1                                                                                                                                                     +
+                   |                 END                                                                                                                                                            +
+                   |         ), sys(metrics, ts, host, device) AS (                                                                                                                                 +
+                   |          SELECT s.metrics,                                                                                                                                                     +
+                   |             s.ts,                                                                                                                                                              +
+                   |             s.host,                                                                                                                                                            +
+                   |             s.device                                                                                                                                                           +
+                   |            FROM (seg                                                                                                                                                           +
+                   |              JOIN test_mgr.system s ON ((seg.host = s.host)))                                                                                                                  +
+                   |           WHERE ((s.category = 'disk'::name) AND (seg.kind = 1) AND (s.ts > (timezone('UTC'::text, now()) - '@ 5 mins'::interval)))                                            +
+                   |         ), last(metrics, ts, host, device) AS (                                                                                                                                +
+                   |          SELECT last(sys.metrics, sys.ts) AS last,                                                                                                                             +
+                   |             max(sys.ts) AS max,                                                                                                                                                +
+                   |             sys.host,                                                                                                                                                          +
+                   |             sys.device                                                                                                                                                         +
+                   |            FROM sys                                                                                                                                                            +
+                   |           GROUP BY sys.host, sys.device                                                                                                                                        +
+                   |         )                                                                                                                                                                      +
+                   |  SELECT max(last.ts) AS "time",                                                                                                                                                +
+                   |     sum(((last.metrics ->> 'free'::text))::bigint) AS free_bytes,                                                                                                              +
+                   |     sum(((last.metrics ->> 'total'::text))::bigint) AS total_bytes                                                                                                             +
+                   |    FROM last;
+ master_disk_usage |  WITH seg(host, kind) AS (                                                                                                                                                     +
+                   |          SELECT gp_segment_configuration.hostname,                                                                                                                             +
+                   |                 CASE                                                                                                                                                           +
+                   |                     WHEN (gp_segment_configuration.content < 0) THEN                                                                                                           +
+                   |                     CASE                                                                                                                                                       +
+                   |                         WHEN (gp_segment_configuration.preferred_role = 'p'::"char") THEN 0                                                                                    +
+                   |                         ELSE 2                                                                                                                                                 +
+                   |                     END                                                                                                                                                        +
+                   |                     ELSE 1                                                                                                                                                     +
+                   |                 END AS "case"                                                                                                                                                  +
+                   |            FROM gp_segment_configuration                                                                                                                                       +
+                   |           GROUP BY gp_segment_configuration.hostname,                                                                                                                          +
+                   |                 CASE                                                                                                                                                           +
+                   |                     WHEN (gp_segment_configuration.content < 0) THEN                                                                                                           +
+                   |                     CASE                                                                                                                                                       +
+                   |                         WHEN (gp_segment_configuration.preferred_role = 'p'::"char") THEN 0                                                                                    +
+                   |                         ELSE 2                                                                                                                                                 +
+                   |                     END                                                                                                                                                        +
+                   |                     ELSE 1                                                                                                                                                     +
+                   |                 END                                                                                                                                                            +
+                   |         ), sys(metrics, ts, host, device) AS (                                                                                                                                 +
+                   |          SELECT s.metrics,                                                                                                                                                     +
+                   |             s.ts,                                                                                                                                                              +
+                   |             s.host,                                                                                                                                                            +
+                   |             s.device                                                                                                                                                           +
+                   |            FROM (seg                                                                                                                                                           +
+                   |              JOIN test_mgr.system s ON ((seg.host = s.host)))                                                                                                                  +
+                   |           WHERE ((s.category = 'disk'::name) AND (seg.kind = 0) AND (s.ts > (timezone('UTC'::text, now()) - '@ 5 mins'::interval)))                                            +
+                   |         ), last(metrics, ts, host, device) AS (                                                                                                                                +
+                   |          SELECT last(sys.metrics, sys.ts) AS last,                                                                                                                             +
+                   |             max(sys.ts) AS max,                                                                                                                                                +
+                   |             sys.host,                                                                                                                                                          +
+                   |             sys.device                                                                                                                                                         +
+                   |            FROM sys                                                                                                                                                            +
+                   |           GROUP BY sys.host, sys.device                                                                                                                                        +
+                   |         )                                                                                                                                                                      +
+                   |  SELECT max(last.ts) AS "time",                                                                                                                                                +
+                   |     sum(((last.metrics ->> 'free'::text))::bigint) AS free_bytes,                                                                                                              +
+                   |     sum(((last.metrics ->> 'total'::text))::bigint) AS total_bytes                                                                                                             +
+                   |    FROM last;
+(5 rows)
+

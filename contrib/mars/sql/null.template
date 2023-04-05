@@ -1,0 +1,148 @@
+insert into :tname values
+-- nothing, just a placeholder
+\set batch 0
+  (:batch, 0, 0)
+
+-- partial nulls
+\set batch 10
+, (:batch, 1, 1)
+, (:batch, 2, 2)
+, (:batch, 3, null)
+, (:batch, 4, null)
+, (:batch, 5, null)
+, (:batch, 6, 6)
+, (:batch, 7, 7)
+, (:batch, 8, 8)
+, (:batch, null, 9)
+, (:batch, null, 10)
+, (:batch, null, null)
+, (:batch, null, null)
+, (:batch, null, 13)
+, (:batch, null, 14)
+
+-- only nulls
+\set batch 20
+, (:batch, null, null)
+, (:batch, null, null)
+, (:batch, null, null)
+
+-- end of the insert
+;
+
+-- verify the store order
+select batch, c1, c2 from :tname;
+
+-- verify the block-level reordered scan order
+select batch, c1, c2 from :tname order by batch, c1;
+
+-- unordered scan
+
+select c1, c2 from :tname where c1 <  4;
+select c1, c2 from :tname where c1 <= 4;
+select c1, c2 from :tname where c1 =  4;
+select c1, c2 from :tname where c1 >= 4;
+select c1, c2 from :tname where c1 >  4;
+
+select c1, c2 from :tname where c2 <  7;
+select c1, c2 from :tname where c2 <= 7;
+select c1, c2 from :tname where c2 =  7;
+select c1, c2 from :tname where c2 >= 7;
+select c1, c2 from :tname where c2 >  7;
+
+select c1, c2 from :tname where c1 in (10, 1, null, 7);
+select c1, c2 from :tname where c2 in (10, 1, null, 7);
+
+-- ordered scan
+
+select c1, c2 from :tname where c1 <  4 order by batch, c1;
+select c1, c2 from :tname where c1 <= 4 order by batch, c1;
+select c1, c2 from :tname where c1 =  4 order by batch, c1;
+select c1, c2 from :tname where c1 >= 4 order by batch, c1;
+select c1, c2 from :tname where c1 >  4 order by batch, c1;
+
+select c1, c2 from :tname where c2 <  7 order by batch, c1;
+select c1, c2 from :tname where c2 <= 7 order by batch, c1;
+select c1, c2 from :tname where c2 =  7 order by batch, c1;
+select c1, c2 from :tname where c2 >= 7 order by batch, c1;
+select c1, c2 from :tname where c2 >  7 order by batch, c1;
+
+select c1, c2 from :tname where c1 in (10, 1, null, 7) order by batch, c1;
+select c1, c2 from :tname where c2 in (10, 1, null, 7) order by batch, c1;
+
+-- ordered backward scan
+
+select c1, c2 from :tname where c1 <  4 order by batch desc, c1 desc;
+select c1, c2 from :tname where c1 <= 4 order by batch desc, c1 desc;
+select c1, c2 from :tname where c1 =  4 order by batch desc, c1 desc;
+select c1, c2 from :tname where c1 >= 4 order by batch desc, c1 desc;
+select c1, c2 from :tname where c1 >  4 order by batch desc, c1 desc;
+
+select c1, c2 from :tname where c2 <  7 order by batch desc, c1 desc;
+select c1, c2 from :tname where c2 <= 7 order by batch desc, c1 desc;
+select c1, c2 from :tname where c2 =  7 order by batch desc, c1 desc;
+select c1, c2 > 8 from :tname where c2 >= 7 order by batch desc, c1 desc;
+select c1, c2 > 8 from :tname where c2 >  7 order by batch desc, c1 desc;
+
+select c1, c2 from :tname where c1 in (10, 1, null, 7) order by batch desc, c1 desc;
+select c1, c2 from :tname where c2 in (10, 1, null, 7) order by batch desc, c1 desc;
+
+-- grouped scan
+
+select batch
+     , count() as row_count
+     , count(c1) as count_c1
+     , count(c2) as count_c2
+  from :tname
+ group by batch;
+
+select batch
+     , min(c1) as min_c1
+     , min(c2) as min_c2
+     , max(c1) as max_c1
+     , max(c2) as max_c2
+  from :tname
+ group by batch;
+
+select batch
+     , first(c1, c1) as first_c1_c1
+     , first(c1, c2) as first_c1_c2
+     , first(c2, c1) as first_c2_c1
+     , first(c2, c2) as first_c2_c2
+  from :tname
+ group by batch;
+
+select batch
+     , last(c1, c1) as last_c1_c1
+     , last(c1, c2) as last_c1_c2
+     , last(c2, c1) as last_c2_c1
+     , last(c2, c2) as last_c2_c2
+  from :tname
+ group by batch;
+
+select batch
+     , sum(c1) as sum_c1
+     , sum(c2) as sum_c2
+     , avg(c1) as avg_c1
+     , avg(c2) as avg_c2
+  from :tname
+ group by batch;
+
+select min(c2) as min_c2
+     , max(c2) as max_c2
+  from :tname
+ where c1 is null;
+
+select min(c2) as min_c2
+     , max(c2) as max_c2
+  from :tname
+ where c1 is not null;
+
+select sum(c2) as sum_c2
+     , trunc(avg(c2), 2) as avg_c2
+  from :tname
+ where c1 is null;
+
+select sum(c2) as sum_c2
+     , trunc(avg(c2), 2) as avg_c2
+  from :tname
+ where c1 is not null;

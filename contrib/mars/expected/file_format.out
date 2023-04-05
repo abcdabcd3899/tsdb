@@ -1,0 +1,794 @@
+--
+-- Verify mars tables of different file formats.
+--
+\set t_auto test_mars_file_format_t1_auto
+\set t_v0_1 test_mars_file_format_t1_v0_1
+\set t_v1_0 test_mars_file_format_t1_v1_0
+\set encoding 'encoding (compresstype=lz4)'
+set mars.default_file_format to 'auto';
+\set tname :t_auto
+\i sql/file_format.template
+create table :tname
+     ( batch int    :encoding
+     , i4 int4      :encoding
+     , i8 int8      :encoding
+     , f4 float4    :encoding
+     , f8 float8    :encoding
+     , ts timestamp :encoding
+     , tt text      :encoding
+     )
+ using mars
+  with (group_param_col_ = '{i4 in 10}')
+ distributed by (batch);
+-- the first batch is stored in specified format
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(0, 99) i;
+-- the second batch is stored in v0.1
+set mars.default_file_format to 'v0.1';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v1';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(100, 199) i;
+-- the third batch is stored in v1.0
+set mars.default_file_format to 'v1.0';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v2';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(200, 299) i;
+select * from :tname where i4 between  78 and  82;
+ batch | i4 |      i8      | f4  |        f8         |            ts            |      tt      
+-------+----+--------------+-----+-------------------+--------------------------+--------------
+     0 | 78 | 335007449088 | 7.8 | 78.96296295420001 | Sat Jan 01 12:01:18 2000 | some 78 text
+     0 | 79 | 339302416384 | 7.9 |     79.9753086331 | Sat Jan 01 12:01:19 2000 | some 79 text
+     0 | 80 | 343597383680 |   8 |      80.987654312 | Sat Jan 01 12:01:20 2000 | some 80 text
+     0 | 81 | 347892350976 | 8.1 | 81.99999999090001 | Sat Jan 01 12:01:21 2000 | some 81 text
+     0 | 82 | 352187318272 | 8.2 |     83.0123456698 | Sat Jan 01 12:01:22 2000 | some 82 text
+(5 rows)
+
+select * from :tname where i4 between 178 and 182;
+ batch | i4  |      i8      |  f4  |         f8         |            ts            |      tt       
+-------+-----+--------------+------+--------------------+--------------------------+---------------
+     0 | 178 | 764504178688 | 17.8 |     180.1975308442 | Sat Jan 01 12:02:58 2000 | some 178 text
+     0 | 179 | 768799145984 | 17.9 |     181.2098765231 | Sat Jan 01 12:02:59 2000 | some 179 text
+     0 | 180 | 773094113280 |   18 |      182.222222202 | Sat Jan 01 12:03:00 2000 | some 180 text
+     0 | 181 | 777389080576 | 18.1 | 183.23456788090002 | Sat Jan 01 12:03:01 2000 | some 181 text
+     0 | 182 | 781684047872 | 18.2 | 184.24691355980002 | Sat Jan 01 12:03:02 2000 | some 182 text
+(5 rows)
+
+select * from :tname where i4 between 278 and 282;
+ batch | i4  |      i8       |  f4  |         f8         |            ts            |      tt       
+-------+-----+---------------+------+--------------------+--------------------------+---------------
+     0 | 278 | 1194000908288 | 27.8 |     281.4320987342 | Sat Jan 01 12:04:38 2000 | some 278 text
+     0 | 279 | 1198295875584 | 27.9 | 282.44444441310003 | Sat Jan 01 12:04:39 2000 | some 279 text
+     0 | 280 | 1202590842880 |   28 |      283.456790092 | Sat Jan 01 12:04:40 2000 | some 280 text
+     0 | 281 | 1206885810176 | 28.1 | 284.46913577090004 | Sat Jan 01 12:04:41 2000 | some 281 text
+     0 | 282 | 1211180777472 | 28.2 |     285.4814814498 | Sat Jan 01 12:04:42 2000 | some 282 text
+(5 rows)
+
+select sum(i4) as i4
+     , sum(i8) as i8
+     , sum(f4) as f4
+     , trunc(sum(f8)::numeric, 6) as f8
+     , max(ts) as ts
+     , count(tt) as tt
+  from :tname;
+  i4   |       i8        |  f4  |      f8      |            ts            | tt  
+-------+-----------------+------+--------------+--------------------------+-----
+ 44850 | 192629283225600 | 4485 | 45403.703698 | Sat Jan 01 12:04:59 2000 | 300
+(1 row)
+
+select * from :tname
+except
+select * from :t_auto;
+ batch | i4 | i8 | f4 | f8 | ts | tt 
+-------+----+----+----+----+----+----
+(0 rows)
+
+-- verify the aux table schema
+\set tnamestr '''' :tname ''''
+select a.attname
+     , a.atttypid::regtype::name
+     , a.attstorage
+  from pg_attribute as a
+  join mx_mars as m
+    on a.attrelid = m.segrelid
+ where m.relid = :tnamestr::regclass
+  and a.attnum > 0
+ order by a.attnum
+;
+          attname           | atttypid | attstorage 
+----------------------------+----------+------------
+ segno                      | bigint   | p
+ batch                      | bigint   | p
+ content                    | bytea    | e
+ rowgroupcount              | integer  | p
+ rowcount                   | bigint   | e
+ null_count                 | bytea    | e
+ sum                        | bytea    | e
+ min_at                     | bytea    | e
+ max_at                     | bytea    | e
+ min                        | bytea    | e
+ max                        | bytea    | e
+ physical_edges             | bytea    | e
+ attr2__group_param_key__i4 | integer  | p
+(13 rows)
+
+-- vi: syntax=sql et :
+set mars.default_file_format to 'v0.1';
+\set tname :t_v0_1
+\i sql/file_format.template
+create table :tname
+     ( batch int    :encoding
+     , i4 int4      :encoding
+     , i8 int8      :encoding
+     , f4 float4    :encoding
+     , f8 float8    :encoding
+     , ts timestamp :encoding
+     , tt text      :encoding
+     )
+ using mars
+  with (group_param_col_ = '{i4 in 10}')
+ distributed by (batch);
+-- the first batch is stored in specified format
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(0, 99) i;
+-- the second batch is stored in v0.1
+set mars.default_file_format to 'v0.1';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v1';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(100, 199) i;
+-- the third batch is stored in v1.0
+set mars.default_file_format to 'v1.0';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v2';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(200, 299) i;
+select * from :tname where i4 between  78 and  82;
+ batch | i4 |      i8      | f4  |        f8         |            ts            |      tt      
+-------+----+--------------+-----+-------------------+--------------------------+--------------
+     0 | 78 | 335007449088 | 7.8 | 78.96296295420001 | Sat Jan 01 12:01:18 2000 | some 78 text
+     0 | 79 | 339302416384 | 7.9 |     79.9753086331 | Sat Jan 01 12:01:19 2000 | some 79 text
+     0 | 80 | 343597383680 |   8 |      80.987654312 | Sat Jan 01 12:01:20 2000 | some 80 text
+     0 | 81 | 347892350976 | 8.1 | 81.99999999090001 | Sat Jan 01 12:01:21 2000 | some 81 text
+     0 | 82 | 352187318272 | 8.2 |     83.0123456698 | Sat Jan 01 12:01:22 2000 | some 82 text
+(5 rows)
+
+select * from :tname where i4 between 178 and 182;
+ batch | i4  |      i8      |  f4  |         f8         |            ts            |      tt       
+-------+-----+--------------+------+--------------------+--------------------------+---------------
+     0 | 178 | 764504178688 | 17.8 |     180.1975308442 | Sat Jan 01 12:02:58 2000 | some 178 text
+     0 | 179 | 768799145984 | 17.9 |     181.2098765231 | Sat Jan 01 12:02:59 2000 | some 179 text
+     0 | 180 | 773094113280 |   18 |      182.222222202 | Sat Jan 01 12:03:00 2000 | some 180 text
+     0 | 181 | 777389080576 | 18.1 | 183.23456788090002 | Sat Jan 01 12:03:01 2000 | some 181 text
+     0 | 182 | 781684047872 | 18.2 | 184.24691355980002 | Sat Jan 01 12:03:02 2000 | some 182 text
+(5 rows)
+
+select * from :tname where i4 between 278 and 282;
+ batch | i4  |      i8       |  f4  |         f8         |            ts            |      tt       
+-------+-----+---------------+------+--------------------+--------------------------+---------------
+     0 | 278 | 1194000908288 | 27.8 |     281.4320987342 | Sat Jan 01 12:04:38 2000 | some 278 text
+     0 | 279 | 1198295875584 | 27.9 | 282.44444441310003 | Sat Jan 01 12:04:39 2000 | some 279 text
+     0 | 280 | 1202590842880 |   28 |      283.456790092 | Sat Jan 01 12:04:40 2000 | some 280 text
+     0 | 281 | 1206885810176 | 28.1 | 284.46913577090004 | Sat Jan 01 12:04:41 2000 | some 281 text
+     0 | 282 | 1211180777472 | 28.2 |     285.4814814498 | Sat Jan 01 12:04:42 2000 | some 282 text
+(5 rows)
+
+select sum(i4) as i4
+     , sum(i8) as i8
+     , sum(f4) as f4
+     , trunc(sum(f8)::numeric, 6) as f8
+     , max(ts) as ts
+     , count(tt) as tt
+  from :tname;
+  i4   |       i8        |  f4  |      f8      |            ts            | tt  
+-------+-----------------+------+--------------+--------------------------+-----
+ 44850 | 192629283225600 | 4485 | 45403.703698 | Sat Jan 01 12:04:59 2000 | 300
+(1 row)
+
+select * from :tname
+except
+select * from :t_auto;
+ batch | i4 | i8 | f4 | f8 | ts | tt 
+-------+----+----+----+----+----+----
+(0 rows)
+
+-- verify the aux table schema
+\set tnamestr '''' :tname ''''
+select a.attname
+     , a.atttypid::regtype::name
+     , a.attstorage
+  from pg_attribute as a
+  join mx_mars as m
+    on a.attrelid = m.segrelid
+ where m.relid = :tnamestr::regclass
+  and a.attnum > 0
+ order by a.attnum
+;
+          attname           | atttypid | attstorage 
+----------------------------+----------+------------
+ segno                      | bigint   | p
+ batch                      | bigint   | p
+ content                    | bytea    | e
+ rowgroupcount              | integer  | p
+ rowcount                   | bigint   | e
+ null_count                 | bytea    | e
+ sum                        | bytea    | e
+ min_at                     | bytea    | e
+ max_at                     | bytea    | e
+ min                        | bytea    | e
+ max                        | bytea    | e
+ physical_edges             | bytea    | e
+ attr2__group_param_key__i4 | integer  | p
+(13 rows)
+
+-- vi: syntax=sql et :
+set mars.default_file_format to 'v1.0';
+\set tname :t_v1_0
+\i sql/file_format.template
+create table :tname
+     ( batch int    :encoding
+     , i4 int4      :encoding
+     , i8 int8      :encoding
+     , f4 float4    :encoding
+     , f8 float8    :encoding
+     , ts timestamp :encoding
+     , tt text      :encoding
+     )
+ using mars
+  with (group_param_col_ = '{i4 in 10}')
+ distributed by (batch);
+-- the first batch is stored in specified format
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(0, 99) i;
+-- the second batch is stored in v0.1
+set mars.default_file_format to 'v0.1';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v1';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(100, 199) i;
+-- the third batch is stored in v1.0
+set mars.default_file_format to 'v1.0';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v2';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(200, 299) i;
+select * from :tname where i4 between  78 and  82;
+ batch | i4 |      i8      | f4  |        f8         |            ts            |      tt      
+-------+----+--------------+-----+-------------------+--------------------------+--------------
+     0 | 78 | 335007449088 | 7.8 | 78.96296295420001 | Sat Jan 01 12:01:18 2000 | some 78 text
+     0 | 79 | 339302416384 | 7.9 |     79.9753086331 | Sat Jan 01 12:01:19 2000 | some 79 text
+     0 | 80 | 343597383680 |   8 |      80.987654312 | Sat Jan 01 12:01:20 2000 | some 80 text
+     0 | 81 | 347892350976 | 8.1 | 81.99999999090001 | Sat Jan 01 12:01:21 2000 | some 81 text
+     0 | 82 | 352187318272 | 8.2 |     83.0123456698 | Sat Jan 01 12:01:22 2000 | some 82 text
+(5 rows)
+
+select * from :tname where i4 between 178 and 182;
+ batch | i4  |      i8      |  f4  |         f8         |            ts            |      tt       
+-------+-----+--------------+------+--------------------+--------------------------+---------------
+     0 | 178 | 764504178688 | 17.8 |     180.1975308442 | Sat Jan 01 12:02:58 2000 | some 178 text
+     0 | 179 | 768799145984 | 17.9 |     181.2098765231 | Sat Jan 01 12:02:59 2000 | some 179 text
+     0 | 180 | 773094113280 |   18 |      182.222222202 | Sat Jan 01 12:03:00 2000 | some 180 text
+     0 | 181 | 777389080576 | 18.1 | 183.23456788090002 | Sat Jan 01 12:03:01 2000 | some 181 text
+     0 | 182 | 781684047872 | 18.2 | 184.24691355980002 | Sat Jan 01 12:03:02 2000 | some 182 text
+(5 rows)
+
+select * from :tname where i4 between 278 and 282;
+ batch | i4  |      i8       |  f4  |         f8         |            ts            |      tt       
+-------+-----+---------------+------+--------------------+--------------------------+---------------
+     0 | 278 | 1194000908288 | 27.8 |     281.4320987342 | Sat Jan 01 12:04:38 2000 | some 278 text
+     0 | 279 | 1198295875584 | 27.9 | 282.44444441310003 | Sat Jan 01 12:04:39 2000 | some 279 text
+     0 | 280 | 1202590842880 |   28 |      283.456790092 | Sat Jan 01 12:04:40 2000 | some 280 text
+     0 | 281 | 1206885810176 | 28.1 | 284.46913577090004 | Sat Jan 01 12:04:41 2000 | some 281 text
+     0 | 282 | 1211180777472 | 28.2 |     285.4814814498 | Sat Jan 01 12:04:42 2000 | some 282 text
+(5 rows)
+
+select sum(i4) as i4
+     , sum(i8) as i8
+     , sum(f4) as f4
+     , trunc(sum(f8)::numeric, 6) as f8
+     , max(ts) as ts
+     , count(tt) as tt
+  from :tname;
+  i4   |       i8        |  f4  |      f8      |            ts            | tt  
+-------+-----------------+------+--------------+--------------------------+-----
+ 44850 | 192629283225600 | 4485 | 45403.703698 | Sat Jan 01 12:04:59 2000 | 300
+(1 row)
+
+select * from :tname
+except
+select * from :t_auto;
+ batch | i4 | i8 | f4 | f8 | ts | tt 
+-------+----+----+----+----+----+----
+(0 rows)
+
+-- verify the aux table schema
+\set tnamestr '''' :tname ''''
+select a.attname
+     , a.atttypid::regtype::name
+     , a.attstorage
+  from pg_attribute as a
+  join mx_mars as m
+    on a.attrelid = m.segrelid
+ where m.relid = :tnamestr::regclass
+  and a.attnum > 0
+ order by a.attnum
+;
+          attname           | atttypid | attstorage 
+----------------------------+----------+------------
+ segno                      | bigint   | p
+ batch                      | bigint   | p
+ content                    | bytea    | e
+ rowgroupcount              | integer  | p
+ rowcount                   | bigint   | e
+ null_count                 | bytea    | e
+ sum                        | bytea    | e
+ min_at                     | bytea    | e
+ max_at                     | bytea    | e
+ min                        | bytea    | e
+ max                        | bytea    | e
+ physical_edges             | bytea    | e
+ attr2__group_param_key__i4 | integer  | p
+(13 rows)
+
+-- vi: syntax=sql et :
+reset mars.default_file_format;
+--
+-- Verify mars tables of different aux table formats.
+--
+\set t_aux_auto test_mars_auxfile_format_t2_auto
+\set t_aux_v1 test_mars_auxfile_format_t2_v1
+\set t_aux_v2 test_mars_auxfile_format_t2_v2
+set mars.default_auxfile_format to 'auto';
+\set tname :t_aux_auto
+\i sql/file_format.template
+create table :tname
+     ( batch int    :encoding
+     , i4 int4      :encoding
+     , i8 int8      :encoding
+     , f4 float4    :encoding
+     , f8 float8    :encoding
+     , ts timestamp :encoding
+     , tt text      :encoding
+     )
+ using mars
+  with (group_param_col_ = '{i4 in 10}')
+ distributed by (batch);
+-- the first batch is stored in specified format
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(0, 99) i;
+-- the second batch is stored in v0.1
+set mars.default_file_format to 'v0.1';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v1';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(100, 199) i;
+-- the third batch is stored in v1.0
+set mars.default_file_format to 'v1.0';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v2';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(200, 299) i;
+select * from :tname where i4 between  78 and  82;
+ batch | i4 |      i8      | f4  |        f8         |            ts            |      tt      
+-------+----+--------------+-----+-------------------+--------------------------+--------------
+     0 | 78 | 335007449088 | 7.8 | 78.96296295420001 | Sat Jan 01 12:01:18 2000 | some 78 text
+     0 | 79 | 339302416384 | 7.9 |     79.9753086331 | Sat Jan 01 12:01:19 2000 | some 79 text
+     0 | 80 | 343597383680 |   8 |      80.987654312 | Sat Jan 01 12:01:20 2000 | some 80 text
+     0 | 81 | 347892350976 | 8.1 | 81.99999999090001 | Sat Jan 01 12:01:21 2000 | some 81 text
+     0 | 82 | 352187318272 | 8.2 |     83.0123456698 | Sat Jan 01 12:01:22 2000 | some 82 text
+(5 rows)
+
+select * from :tname where i4 between 178 and 182;
+ batch | i4  |      i8      |  f4  |         f8         |            ts            |      tt       
+-------+-----+--------------+------+--------------------+--------------------------+---------------
+     0 | 178 | 764504178688 | 17.8 |     180.1975308442 | Sat Jan 01 12:02:58 2000 | some 178 text
+     0 | 179 | 768799145984 | 17.9 |     181.2098765231 | Sat Jan 01 12:02:59 2000 | some 179 text
+     0 | 180 | 773094113280 |   18 |      182.222222202 | Sat Jan 01 12:03:00 2000 | some 180 text
+     0 | 181 | 777389080576 | 18.1 | 183.23456788090002 | Sat Jan 01 12:03:01 2000 | some 181 text
+     0 | 182 | 781684047872 | 18.2 | 184.24691355980002 | Sat Jan 01 12:03:02 2000 | some 182 text
+(5 rows)
+
+select * from :tname where i4 between 278 and 282;
+ batch | i4  |      i8       |  f4  |         f8         |            ts            |      tt       
+-------+-----+---------------+------+--------------------+--------------------------+---------------
+     0 | 278 | 1194000908288 | 27.8 |     281.4320987342 | Sat Jan 01 12:04:38 2000 | some 278 text
+     0 | 279 | 1198295875584 | 27.9 | 282.44444441310003 | Sat Jan 01 12:04:39 2000 | some 279 text
+     0 | 280 | 1202590842880 |   28 |      283.456790092 | Sat Jan 01 12:04:40 2000 | some 280 text
+     0 | 281 | 1206885810176 | 28.1 | 284.46913577090004 | Sat Jan 01 12:04:41 2000 | some 281 text
+     0 | 282 | 1211180777472 | 28.2 |     285.4814814498 | Sat Jan 01 12:04:42 2000 | some 282 text
+(5 rows)
+
+select sum(i4) as i4
+     , sum(i8) as i8
+     , sum(f4) as f4
+     , trunc(sum(f8)::numeric, 6) as f8
+     , max(ts) as ts
+     , count(tt) as tt
+  from :tname;
+  i4   |       i8        |  f4  |      f8      |            ts            | tt  
+-------+-----------------+------+--------------+--------------------------+-----
+ 44850 | 192629283225600 | 4485 | 45403.703698 | Sat Jan 01 12:04:59 2000 | 300
+(1 row)
+
+select * from :tname
+except
+select * from :t_auto;
+ batch | i4 | i8 | f4 | f8 | ts | tt 
+-------+----+----+----+----+----+----
+(0 rows)
+
+-- verify the aux table schema
+\set tnamestr '''' :tname ''''
+select a.attname
+     , a.atttypid::regtype::name
+     , a.attstorage
+  from pg_attribute as a
+  join mx_mars as m
+    on a.attrelid = m.segrelid
+ where m.relid = :tnamestr::regclass
+  and a.attnum > 0
+ order by a.attnum
+;
+          attname           | atttypid | attstorage 
+----------------------------+----------+------------
+ segno                      | bigint   | p
+ batch                      | bigint   | p
+ content                    | bytea    | e
+ rowgroupcount              | integer  | p
+ rowcount                   | bigint   | e
+ null_count                 | bytea    | e
+ sum                        | bytea    | e
+ min_at                     | bytea    | e
+ max_at                     | bytea    | e
+ min                        | bytea    | e
+ max                        | bytea    | e
+ physical_edges             | bytea    | e
+ attr2__group_param_key__i4 | integer  | p
+(13 rows)
+
+-- vi: syntax=sql et :
+set mars.default_auxfile_format to 'v1';
+\set tname :t_aux_v1
+\i sql/file_format.template
+create table :tname
+     ( batch int    :encoding
+     , i4 int4      :encoding
+     , i8 int8      :encoding
+     , f4 float4    :encoding
+     , f8 float8    :encoding
+     , ts timestamp :encoding
+     , tt text      :encoding
+     )
+ using mars
+  with (group_param_col_ = '{i4 in 10}')
+ distributed by (batch);
+-- the first batch is stored in specified format
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(0, 99) i;
+-- the second batch is stored in v0.1
+set mars.default_file_format to 'v0.1';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v1';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(100, 199) i;
+-- the third batch is stored in v1.0
+set mars.default_file_format to 'v1.0';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v2';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(200, 299) i;
+select * from :tname where i4 between  78 and  82;
+ batch | i4 |      i8      | f4  |        f8         |            ts            |      tt      
+-------+----+--------------+-----+-------------------+--------------------------+--------------
+     0 | 78 | 335007449088 | 7.8 | 78.96296295420001 | Sat Jan 01 12:01:18 2000 | some 78 text
+     0 | 79 | 339302416384 | 7.9 |     79.9753086331 | Sat Jan 01 12:01:19 2000 | some 79 text
+     0 | 80 | 343597383680 |   8 |      80.987654312 | Sat Jan 01 12:01:20 2000 | some 80 text
+     0 | 81 | 347892350976 | 8.1 | 81.99999999090001 | Sat Jan 01 12:01:21 2000 | some 81 text
+     0 | 82 | 352187318272 | 8.2 |     83.0123456698 | Sat Jan 01 12:01:22 2000 | some 82 text
+(5 rows)
+
+select * from :tname where i4 between 178 and 182;
+ batch | i4  |      i8      |  f4  |         f8         |            ts            |      tt       
+-------+-----+--------------+------+--------------------+--------------------------+---------------
+     0 | 178 | 764504178688 | 17.8 |     180.1975308442 | Sat Jan 01 12:02:58 2000 | some 178 text
+     0 | 179 | 768799145984 | 17.9 |     181.2098765231 | Sat Jan 01 12:02:59 2000 | some 179 text
+     0 | 180 | 773094113280 |   18 |      182.222222202 | Sat Jan 01 12:03:00 2000 | some 180 text
+     0 | 181 | 777389080576 | 18.1 | 183.23456788090002 | Sat Jan 01 12:03:01 2000 | some 181 text
+     0 | 182 | 781684047872 | 18.2 | 184.24691355980002 | Sat Jan 01 12:03:02 2000 | some 182 text
+(5 rows)
+
+select * from :tname where i4 between 278 and 282;
+ batch | i4  |      i8       |  f4  |         f8         |            ts            |      tt       
+-------+-----+---------------+------+--------------------+--------------------------+---------------
+     0 | 278 | 1194000908288 | 27.8 |     281.4320987342 | Sat Jan 01 12:04:38 2000 | some 278 text
+     0 | 279 | 1198295875584 | 27.9 | 282.44444441310003 | Sat Jan 01 12:04:39 2000 | some 279 text
+     0 | 280 | 1202590842880 |   28 |      283.456790092 | Sat Jan 01 12:04:40 2000 | some 280 text
+     0 | 281 | 1206885810176 | 28.1 | 284.46913577090004 | Sat Jan 01 12:04:41 2000 | some 281 text
+     0 | 282 | 1211180777472 | 28.2 |     285.4814814498 | Sat Jan 01 12:04:42 2000 | some 282 text
+(5 rows)
+
+select sum(i4) as i4
+     , sum(i8) as i8
+     , sum(f4) as f4
+     , trunc(sum(f8)::numeric, 6) as f8
+     , max(ts) as ts
+     , count(tt) as tt
+  from :tname;
+  i4   |       i8        |  f4  |      f8      |            ts            | tt  
+-------+-----------------+------+--------------+--------------------------+-----
+ 44850 | 192629283225600 | 4485 | 45403.703698 | Sat Jan 01 12:04:59 2000 | 300
+(1 row)
+
+select * from :tname
+except
+select * from :t_auto;
+ batch | i4 | i8 | f4 | f8 | ts | tt 
+-------+----+----+----+----+----+----
+(0 rows)
+
+-- verify the aux table schema
+\set tnamestr '''' :tname ''''
+select a.attname
+     , a.atttypid::regtype::name
+     , a.attstorage
+  from pg_attribute as a
+  join mx_mars as m
+    on a.attrelid = m.segrelid
+ where m.relid = :tnamestr::regclass
+  and a.attnum > 0
+ order by a.attnum
+;
+          attname           | atttypid | attstorage 
+----------------------------+----------+------------
+ segno                      | bigint   | p
+ batch                      | bigint   | p
+ content                    | bytea    | x
+ rowgroupcount              | integer  | p
+ rowcount                   | bigint[] | x
+ null_count                 | bytea[]  | x
+ sum                        | bytea[]  | x
+ min_at                     | bytea[]  | x
+ max_at                     | bytea[]  | x
+ min                        | bytea[]  | x
+ max                        | bytea[]  | x
+ attr2__group_param_key__i4 | integer  | p
+(12 rows)
+
+-- vi: syntax=sql et :
+set mars.default_auxfile_format to 'v2';
+\set tname :t_aux_v2
+\i sql/file_format.template
+create table :tname
+     ( batch int    :encoding
+     , i4 int4      :encoding
+     , i8 int8      :encoding
+     , f4 float4    :encoding
+     , f8 float8    :encoding
+     , ts timestamp :encoding
+     , tt text      :encoding
+     )
+ using mars
+  with (group_param_col_ = '{i4 in 10}')
+ distributed by (batch);
+-- the first batch is stored in specified format
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(0, 99) i;
+-- the second batch is stored in v0.1
+set mars.default_file_format to 'v0.1';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v1';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(100, 199) i;
+-- the third batch is stored in v1.0
+set mars.default_file_format to 'v1.0';
+-- aux table is inserted in the created schema, no longer controlled by the guc
+set mars.default_auxfile_format to 'v2';
+insert into :tname
+select 0 as batch
+     , i as i4
+     , i * 4294967296::int8 as i8
+     , i * 0.1 as f4
+     , i * 1.0123456789::float8 as f8
+     , '2000-01-01 12:00:00'::timestamp + i::text::interval as ts
+     , 'some ' || i || ' text' as tt
+  from generate_series(200, 299) i;
+select * from :tname where i4 between  78 and  82;
+ batch | i4 |      i8      | f4  |        f8         |            ts            |      tt      
+-------+----+--------------+-----+-------------------+--------------------------+--------------
+     0 | 78 | 335007449088 | 7.8 | 78.96296295420001 | Sat Jan 01 12:01:18 2000 | some 78 text
+     0 | 79 | 339302416384 | 7.9 |     79.9753086331 | Sat Jan 01 12:01:19 2000 | some 79 text
+     0 | 80 | 343597383680 |   8 |      80.987654312 | Sat Jan 01 12:01:20 2000 | some 80 text
+     0 | 81 | 347892350976 | 8.1 | 81.99999999090001 | Sat Jan 01 12:01:21 2000 | some 81 text
+     0 | 82 | 352187318272 | 8.2 |     83.0123456698 | Sat Jan 01 12:01:22 2000 | some 82 text
+(5 rows)
+
+select * from :tname where i4 between 178 and 182;
+ batch | i4  |      i8      |  f4  |         f8         |            ts            |      tt       
+-------+-----+--------------+------+--------------------+--------------------------+---------------
+     0 | 178 | 764504178688 | 17.8 |     180.1975308442 | Sat Jan 01 12:02:58 2000 | some 178 text
+     0 | 179 | 768799145984 | 17.9 |     181.2098765231 | Sat Jan 01 12:02:59 2000 | some 179 text
+     0 | 180 | 773094113280 |   18 |      182.222222202 | Sat Jan 01 12:03:00 2000 | some 180 text
+     0 | 181 | 777389080576 | 18.1 | 183.23456788090002 | Sat Jan 01 12:03:01 2000 | some 181 text
+     0 | 182 | 781684047872 | 18.2 | 184.24691355980002 | Sat Jan 01 12:03:02 2000 | some 182 text
+(5 rows)
+
+select * from :tname where i4 between 278 and 282;
+ batch | i4  |      i8       |  f4  |         f8         |            ts            |      tt       
+-------+-----+---------------+------+--------------------+--------------------------+---------------
+     0 | 278 | 1194000908288 | 27.8 |     281.4320987342 | Sat Jan 01 12:04:38 2000 | some 278 text
+     0 | 279 | 1198295875584 | 27.9 | 282.44444441310003 | Sat Jan 01 12:04:39 2000 | some 279 text
+     0 | 280 | 1202590842880 |   28 |      283.456790092 | Sat Jan 01 12:04:40 2000 | some 280 text
+     0 | 281 | 1206885810176 | 28.1 | 284.46913577090004 | Sat Jan 01 12:04:41 2000 | some 281 text
+     0 | 282 | 1211180777472 | 28.2 |     285.4814814498 | Sat Jan 01 12:04:42 2000 | some 282 text
+(5 rows)
+
+select sum(i4) as i4
+     , sum(i8) as i8
+     , sum(f4) as f4
+     , trunc(sum(f8)::numeric, 6) as f8
+     , max(ts) as ts
+     , count(tt) as tt
+  from :tname;
+  i4   |       i8        |  f4  |      f8      |            ts            | tt  
+-------+-----------------+------+--------------+--------------------------+-----
+ 44850 | 192629283225600 | 4485 | 45403.703698 | Sat Jan 01 12:04:59 2000 | 300
+(1 row)
+
+select * from :tname
+except
+select * from :t_auto;
+ batch | i4 | i8 | f4 | f8 | ts | tt 
+-------+----+----+----+----+----+----
+(0 rows)
+
+-- verify the aux table schema
+\set tnamestr '''' :tname ''''
+select a.attname
+     , a.atttypid::regtype::name
+     , a.attstorage
+  from pg_attribute as a
+  join mx_mars as m
+    on a.attrelid = m.segrelid
+ where m.relid = :tnamestr::regclass
+  and a.attnum > 0
+ order by a.attnum
+;
+          attname           | atttypid | attstorage 
+----------------------------+----------+------------
+ segno                      | bigint   | p
+ batch                      | bigint   | p
+ content                    | bytea    | e
+ rowgroupcount              | integer  | p
+ rowcount                   | bigint   | e
+ null_count                 | bytea    | e
+ sum                        | bytea    | e
+ min_at                     | bytea    | e
+ max_at                     | bytea    | e
+ min                        | bytea    | e
+ max                        | bytea    | e
+ physical_edges             | bytea    | e
+ attr2__group_param_key__i4 | integer  | p
+(13 rows)
+
+-- vi: syntax=sql et :
+-- vi: et :

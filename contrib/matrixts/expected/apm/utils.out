@@ -1,0 +1,1435 @@
+---------------------------------------------
+-- Internal utility functions
+---------------------------------------------
+-- start_ignore
+CREATE EXTENSION matrixts;
+ERROR:  extension "matrixts" already exists
+SET enable_mergejoin TO off;
+SET enable_nestloop TO off;
+SET enable_parallel_mode TO off;
+SET gp_enable_multiphase_agg TO off;
+SET optimizer TO off;
+CREATE SCHEMA IF NOT EXISTS apm_test;
+NOTICE:  schema "apm_test" already exists, skipping
+SET matrix.ts_guc_apm_allow_dml TO ON;
+TRUNCATE matrixts_internal.apm_operation_log;
+TRUNCATE matrixts_internal.apm_rel_policy;
+TRUNCATE matrixts_internal.apm_rel_policy_action;
+SET matrix.ts_guc_apm_allow_dml TO OFF;
+-- end_ignore
+---------------------------------------------
+-- apm_eval_partbound
+-- apm_partition_boundary
+---------------------------------------------
+-- should return error if oid is NULL
+SELECT matrixts_internal.apm_eval_partbound(NULL, '1 year');
+ERROR:  invalid OID
+-- should return error if interval is NULL
+SELECT matrixts_internal.apm_eval_partbound('pg_class'::regclass::oid, NULL);
+ERROR:  invalid interval
+-- should return error when oid does not point to a valid relation
+SELECT matrixts_internal.apm_eval_partbound(9999999::oid, '1 year');
+ERROR:  could not open relation with OID 9999999
+-- should read from pg_class table when syscache is out of date
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.this_is_a_new_table;
+NOTICE:  table "this_is_a_new_table" does not exist, skipping
+CREATE TABLE apm_test.this_is_a_new_table (id int UNIQUE);
+-- end_ignore
+-- should report missing relpartbound
+SELECT matrixts_internal.apm_eval_partbound((SELECT max(oid) FROM pg_class WHERE relname = 'this_is_a_new_table')::oid, '1 year');
+ERROR:  missing relpartbound for relation 1394127
+ROLLBACK;
+BEGIN;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.this_is_a_new_table;
+NOTICE:  table "this_is_a_new_table" does not exist, skipping
+CREATE TABLE apm_test.this_is_a_new_table (id int UNIQUE);
+-- end_ignore
+-- should report missing relpartbound
+SELECT matrixts_internal.apm_partition_boundary('apm_test.this_is_a_new_table'::regclass::oid);
+ERROR:  missing relpartbound for relation 1394132
+ROLLBACK;
+-- start_ignore
+CREATE TABLE apm_test.has_default (ts timestamp, region text)
+   DISTRIBUTED BY (region)
+   PARTITION BY RANGE (ts)
+  ( DEFAULT PARTITION other ) ;
+-- end_ignore
+-- should return NULL for default partition
+SELECT matrixts_internal.apm_partition_boundary('apm_test.has_default_1_prt_other'::regclass::oid);
+ apm_partition_boundary 
+------------------------
+ 
+(1 row)
+
+-- should return 0 because default partition cannot compare to timestamp
+SELECT matrixts_internal.apm_eval_partbound('apm_test.has_default_1_prt_other'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  0
+(1 row)
+
+-- start_ignore
+CREATE TABLE apm_test.by_list (type int, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY LIST (type)
+  ( PARTITION t1 VALUES (1),
+    PARTITION t234 VALUES (2, 3, 4) ) ;
+-- end_ignore
+-- should return NULL for list partition
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_list_1_prt_t234'::regclass::oid);
+ apm_partition_boundary 
+------------------------
+ 
+(1 row)
+
+-- should return 0 because list partition does not have a partition boundary to compare with timestamp
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_list_1_prt_t234'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  0
+(1 row)
+
+-- start_ignore
+CREATE TABLE apm_test.by_hash (a int, b int) PARTITION BY HASH (b);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'a' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+CREATE TABLE apm_test.by_hash_0 PARTITION OF apm_test.by_hash FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+NOTICE:  table has parent, setting distribution columns to match parent table
+CREATE TABLE apm_test.by_hash_1 PARTITION OF apm_test.by_hash FOR VALUES WITH (MODULUS 2, REMAINDER 1);
+NOTICE:  table has parent, setting distribution columns to match parent table
+-- end_ignore
+-- should return NULL for hash partition
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_hash_1'::regclass::oid);
+ apm_partition_boundary 
+------------------------
+ 
+(1 row)
+
+-- should return 0 because hash partition does not have a partition boundary to compare with timestamp
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_hash_1'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  0
+(1 row)
+
+-- start_ignore
+CREATE TABLE apm_test.by_int (ts int, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (2010) END (2014) EVERY (1) ) ;
+-- end_ignore
+-- should return NULL for int partition
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_int_1_prt_yr_3'::regclass::oid);
+ apm_partition_boundary 
+------------------------
+ 
+(1 row)
+
+-- should return 0 because int partition key cannot compare to timestamp
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_int_1_prt_yr_3'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  0
+(1 row)
+
+-- start_ignore
+CREATE TABLE apm_test.by_smallint (ts smallint, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (2010) END (2014) EVERY (1) ) ;
+-- end_ignore
+-- should return NULL for smallint partition
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_smallint_1_prt_yr_3'::regclass::oid);
+ apm_partition_boundary 
+------------------------
+ 
+(1 row)
+
+-- should return 0 because smallint partition key cannot compare to timestamp
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_smallint_1_prt_yr_3'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  0
+(1 row)
+
+-- start_ignore
+CREATE TABLE apm_test.by_bigint (ts bigint, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (2010) END (2014) EVERY (1) ) ;
+-- end_ignore
+-- should return NULL for bigint partition
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_bigint_1_prt_yr_3'::regclass::oid);
+ apm_partition_boundary 
+------------------------
+ 
+(1 row)
+
+-- should return 0 because smallint partition key cannot compare to timestamp
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_bigint_1_prt_yr_3'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  0
+(1 row)
+
+-- start_ignore
+CREATE TABLE apm_test.by_time (ts time without time zone, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION hr START ('00:00') END ('04:00') EVERY ('1 hour') ) ;
+-- end_ignore
+-- should return NULL for time partition
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_time_1_prt_hr_2'::regclass::oid);
+ apm_partition_boundary 
+------------------------
+ 
+(1 row)
+
+-- should return 0 because time partition key cannot compare to timestamp
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_time_1_prt_hr_2'::regclass::oid, '1 hour');
+ apm_eval_partbound 
+--------------------
+                  0
+(1 row)
+
+-- start_ignore
+CREATE TABLE apm_test.by_timetz (ts time with time zone, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION hr START ('00:00+08:00') END ('04:00+08:00') EVERY ('1 hour'::interval) ) ;
+-- end_ignore
+-- should return NULL for timetz partition
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_timetz_1_prt_hr_2'::regclass::oid);
+ apm_partition_boundary 
+------------------------
+ 
+(1 row)
+
+-- should return 0 because timetz partition key cannot compare to timestamp
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_timetz_1_prt_hr_2'::regclass::oid, '1 hour');
+ apm_eval_partbound 
+--------------------
+                  0
+(1 row)
+
+-- start_ignore
+CREATE TABLE apm_test.by_interval (ts interval, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION iv START ('1 min') END ('20 min') EVERY ('10 min') ) ;
+-- end_ignore
+-- should return NULL for interval partition
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_interval_1_prt_iv_1'::regclass::oid);
+ apm_partition_boundary 
+------------------------
+ 
+(1 row)
+
+SELECT * FROM matrixts_internal.apm_partition_boundary('apm_test.by_interval_1_prt_iv_1'::regclass::oid);
+ fromts | tots 
+--------+------
+        | 
+(1 row)
+
+-- should return 0 because interval partition key cannot compare to timestamp
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_interval_1_prt_iv_1'::regclass::oid, '1 hour');
+ apm_eval_partbound 
+--------------------
+                  0
+(1 row)
+
+-- Partition by timestamp without time zone
+BEGIN;
+-- timezone 00:00
+SET timezone TO UTC;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_ts;
+NOTICE:  table "by_ts" does not exist, skipping
+CREATE TABLE apm_test.by_ts (ts timestamp, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (now() - '10 year'::interval) END (now() - '5 year'::interval) EVERY ('1 year') ) ;
+DROP TABLE IF EXISTS apm_test.by_ts2;
+NOTICE:  table "by_ts2" does not exist, skipping
+CREATE TABLE apm_test.by_ts2 (ts timestamp, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START ('2010-01-01') END ('2015-01-01') EVERY ('1 year') ) ;
+-- end_ignore
+-- should return 1 because now() - 1 year is after this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '1 year', now());
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 2 because now() - 8 year is inside partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '8 year');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '8 year', now());
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+-- should return 3 because now() - 9 year is before this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '9 year');
+ apm_eval_partbound 
+--------------------
+                  3
+(1 row)
+
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '9 year', now());
+ apm_eval_partbound 
+--------------------
+                  3
+(1 row)
+
+-- should return partition boundary in tz
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_ts2_1_prt_yr_3'::regclass::oid);
+                     apm_partition_boundary                      
+-----------------------------------------------------------------
+ ("Sun Jan 01 00:00:00 2012 UTC","Tue Jan 01 00:00:00 2013 UTC")
+(1 row)
+
+SELECT * FROM matrixts_internal.apm_partition_boundary('apm_test.by_ts2_1_prt_yr_3'::regclass::oid);
+            fromts            |             tots             
+------------------------------+------------------------------
+ Sun Jan 01 00:00:00 2012 UTC | Tue Jan 01 00:00:00 2013 UTC
+(1 row)
+
+ROLLBACK;
+BEGIN;
+-- timezone +08:00
+SET timezone TO 'Asia/Shanghai';
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_ts;
+NOTICE:  table "by_ts" does not exist, skipping
+CREATE TABLE apm_test.by_ts (ts timestamp, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (now() - '10 year'::interval) END (now() - '5 year'::interval) EVERY ('1 year') ) ;
+DROP TABLE IF EXISTS apm_test.by_ts2;
+NOTICE:  table "by_ts2" does not exist, skipping
+CREATE TABLE apm_test.by_ts2 (ts timestamp, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START ('2010-01-01') END ('2015-01-01') EVERY ('1 year') ) ;
+-- end_ignore
+-- should return 1 because now() - 1 year is after this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 1 because now() - 7 year is inside this partition boundary due to timezone diff
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '7 year');
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 2 because now() - 8 year is before this partition boundary due to timezone diff
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '8 year');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+-- should return 3 because now() - 9 year is before this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '9 year');
+ apm_eval_partbound 
+--------------------
+                  3
+(1 row)
+
+-- should return partition boundary in tz
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_ts2_1_prt_yr_3'::regclass::oid);
+                     apm_partition_boundary                      
+-----------------------------------------------------------------
+ ("Sun Jan 01 00:00:00 2012 CST","Tue Jan 01 00:00:00 2013 CST")
+(1 row)
+
+SELECT * FROM matrixts_internal.apm_partition_boundary('apm_test.by_ts2_1_prt_yr_3'::regclass::oid);
+            fromts            |             tots             
+------------------------------+------------------------------
+ Sun Jan 01 00:00:00 2012 CST | Tue Jan 01 00:00:00 2013 CST
+(1 row)
+
+ROLLBACK;
+BEGIN;
+-- timezone -05:00
+SET timezone TO 'America/Detroit';
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_ts;
+NOTICE:  table "by_ts" does not exist, skipping
+CREATE TABLE apm_test.by_ts (ts timestamp, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (now() - '10 year'::interval) END (now() - '5 year'::interval) EVERY ('1 year') ) ;
+DROP TABLE IF EXISTS apm_test.by_ts2;
+NOTICE:  table "by_ts2" does not exist, skipping
+CREATE TABLE apm_test.by_ts2 (ts timestamp, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START ('2010-01-01') END ('2015-01-01') EVERY ('1 year') ) ;
+-- end_ignore
+-- should return 1 because now() - 1 year is after this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 1 because now() - 7 year is after this partition boundary due to timezone diff
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '7 year');
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 2 because now() - 8 year is inside this partition boundary due to timezone diff
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '8 year');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+-- should return 3 because now() - 9 year is before this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_ts_1_prt_yr_3'::regclass::oid, '9 year');
+ apm_eval_partbound 
+--------------------
+                  3
+(1 row)
+
+-- should return partition boundary in tz
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_ts2_1_prt_yr_3'::regclass::oid);
+                     apm_partition_boundary                      
+-----------------------------------------------------------------
+ ("Sun Jan 01 00:00:00 2012 EST","Tue Jan 01 00:00:00 2013 EST")
+(1 row)
+
+SELECT * FROM matrixts_internal.apm_partition_boundary('apm_test.by_ts2_1_prt_yr_3'::regclass::oid);
+            fromts            |             tots             
+------------------------------+------------------------------
+ Sun Jan 01 00:00:00 2012 EST | Tue Jan 01 00:00:00 2013 EST
+(1 row)
+
+ROLLBACK;
+-- Partition by timestamp with time zone
+BEGIN;
+-- timezone 00:00
+SET timezone TO UTC;
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_tstz;
+NOTICE:  table "by_tstz" does not exist, skipping
+CREATE TABLE apm_test.by_tstz (ts timestamp with time zone, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (now() - '10 year'::interval) END (now() - '5 year'::interval) EVERY ('1 year') ) ;
+DROP TABLE IF EXISTS apm_test.by_tstz2;
+NOTICE:  table "by_tstz2" does not exist, skipping
+CREATE TABLE apm_test.by_tstz2 (ts timestamp with time zone, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START ('2010-03-02 01:02:03 ') END ('2015-01-01') EVERY ('1 year') ) ;
+-- end_ignore
+-- should return 1 because now() - 1 year is after this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '1 year', now());
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 2 because now() - 8 year is inside partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '8 year');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '8 year', now());
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+-- should return 3 because now() - 9 year is before this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '9 year');
+ apm_eval_partbound 
+--------------------
+                  3
+(1 row)
+
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '9 year', now());
+ apm_eval_partbound 
+--------------------
+                  3
+(1 row)
+
+-- should return partition boundary in tz
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_tstz2_1_prt_yr_3'::regclass::oid);
+                     apm_partition_boundary                      
+-----------------------------------------------------------------
+ ("Fri Mar 02 01:02:03 2012 UTC","Sat Mar 02 01:02:03 2013 UTC")
+(1 row)
+
+ROLLBACK;
+BEGIN;
+-- timezone +08:00
+SET timezone TO 'Asia/Shanghai';
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_tstz;
+NOTICE:  table "by_tstz" does not exist, skipping
+CREATE TABLE apm_test.by_tstz (ts timestamp with time zone, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (now() - '10 year'::interval) END (now() - '5 year'::interval) EVERY ('1 year') ) ;
+DROP TABLE IF EXISTS apm_test.by_tstz2;
+NOTICE:  table "by_tstz2" does not exist, skipping
+CREATE TABLE apm_test.by_tstz2 (ts timestamp with time zone, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START ('2010-03-02 01:02:03 ') END ('2015-01-01') EVERY ('1 year') ) ;
+-- end_ignore
+-- should return 1 because now() - 1 year is after this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 1 because now() - 7 year is after this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '7 year');
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 2 because now() - 8 year is inside this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '8 year');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+-- should return 3 because now() - 9 year is before this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '9 year');
+ apm_eval_partbound 
+--------------------
+                  3
+(1 row)
+
+-- should return partition boundary in tz
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_tstz2_1_prt_yr_3'::regclass::oid);
+                     apm_partition_boundary                      
+-----------------------------------------------------------------
+ ("Fri Mar 02 01:02:03 2012 CST","Sat Mar 02 01:02:03 2013 CST")
+(1 row)
+
+ROLLBACK;
+BEGIN;
+-- timezone -05:00
+SET timezone TO 'America/Detroit';
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_tstz;
+NOTICE:  table "by_tstz" does not exist, skipping
+CREATE TABLE apm_test.by_tstz (ts timestamp with time zone, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (now() - '10 year'::interval) END (now() - '5 year'::interval) EVERY ('1 year') ) ;
+DROP TABLE IF EXISTS apm_test.by_tstz2;
+NOTICE:  table "by_tstz2" does not exist, skipping
+CREATE TABLE apm_test.by_tstz2 (ts timestamp with time zone, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START ('2010-03-02 01:02:03 ') END ('2015-01-01') EVERY ('1 year') ) ;
+-- end_ignore
+-- should return 1 because now() - 1 year is after this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '1 year');
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 1 because now() - 7 year is after this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '7 year');
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 2 because now() - 8 year is inside this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '8 year');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+-- should return 3 because now() - 9 year is before this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_tstz_1_prt_yr_3'::regclass::oid, '9 year');
+ apm_eval_partbound 
+--------------------
+                  3
+(1 row)
+
+-- should return partition boundary in tz
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_tstz2_1_prt_yr_3'::regclass::oid);
+                     apm_partition_boundary                      
+-----------------------------------------------------------------
+ ("Fri Mar 02 01:02:03 2012 EST","Sat Mar 02 01:02:03 2013 EST")
+(1 row)
+
+ROLLBACK;
+-- Partition by date
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_date;
+NOTICE:  table "by_date" does not exist, skipping
+CREATE TABLE apm_test.by_date (ts date, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION dt START (now()::date - '5 days'::interval) END (now()::date) EVERY ('2 days'::interval) ) ;
+DROP TABLE IF EXISTS apm_test.by_date2;
+NOTICE:  table "by_date2" does not exist, skipping
+CREATE TABLE apm_test.by_date2 (ts date, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION dt START ('2020-03-02') END ('2020-03-07') EVERY ('2 days'::interval) ) ;
+-- end_ignore
+-- should return 1 because now() - 1 min is after this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_date_1_prt_dt_2'::regclass::oid, '1 min', now());
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 2 because now() - 2 days is inside this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_date_1_prt_dt_2'::regclass::oid, '2 days');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+-- should return 3 because now() - 1 month is before this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_date_1_prt_dt_2'::regclass::oid, '1 month');
+ apm_eval_partbound 
+--------------------
+                  3
+(1 row)
+
+-- should return partition boundary in tz
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_date2_1_prt_dt_2'::regclass::oid);
+                     apm_partition_boundary                      
+-----------------------------------------------------------------
+ ("Wed Mar 04 00:00:00 2020 PST","Fri Mar 06 00:00:00 2020 PST")
+(1 row)
+
+-- MAXVALUE
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_max;
+NOTICE:  table "by_max" does not exist, skipping
+CREATE TABLE apm_test.by_max (ts date, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START (now()::date - '3 month'::interval) END (now()::date) EVERY ('1 month'::interval) ) ;
+ALTER TABLE apm_test.by_max ADD PARTITION max_part START (now()::date) INCLUSIVE;
+DROP TABLE IF EXISTS apm_test.by_max2;
+NOTICE:  table "by_max2" does not exist, skipping
+CREATE TABLE apm_test.by_max2 (ts date, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION yr START ('2020-03-02') END ('2020-05-07')  EVERY ('1 month'::interval) ) ;
+ALTER TABLE apm_test.by_max2 ADD PARTITION max_part START ('2020-12-31') INCLUSIVE;
+-- end_ignore
+-- should return 2 because now() - 0 sec is inside this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_max_1_prt_max_part'::regclass::oid, '0 sec');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+-- should return 2 because now() + 2000 years is inside this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_max_1_prt_max_part'::regclass::oid, '- 2000 years', now());
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+-- should return 3 because now() - 1 day is before this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_max_1_prt_max_part'::regclass::oid, '1 days');
+ apm_eval_partbound 
+--------------------
+                  3
+(1 row)
+
+-- should return partition boundary in tz
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_max2_1_prt_max_part'::regclass::oid);
+          apm_partition_boundary           
+-------------------------------------------
+ ("Thu Dec 31 00:00:00 2020 PST",infinity)
+(1 row)
+
+-- MINVALUE
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_min;
+NOTICE:  table "by_min" does not exist, skipping
+CREATE TABLE apm_test.by_min (ts timestamp, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION mo START (now()::date - '3 month'::interval) END (now()::date) EVERY ('1 month'::interval) ) ;
+ALTER TABLE apm_test.by_min ADD PARTITION min_part END (now() - '1 year'::interval) INCLUSIVE;
+DROP TABLE IF EXISTS apm_test.by_min2;
+NOTICE:  table "by_min2" does not exist, skipping
+CREATE TABLE apm_test.by_min2 (ts timestamp, region text)
+  DISTRIBUTED BY (region)
+  PARTITION BY RANGE (ts)
+  ( PARTITION mo START ('2020-03-02 11:55:59') END ('2020-05-07 22:47:26')  EVERY ('1 month'::interval) ) ;
+ALTER TABLE apm_test.by_min2 ADD PARTITION min_part END ('2020-03-02 11:55:58') INCLUSIVE;
+-- end_ignore
+-- should return 1 because now() - 0 sec is inside this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_min_1_prt_min_part'::regclass::oid, '0 sec', now());
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 1 because now() - 10 month is before this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_min_1_prt_min_part'::regclass::oid, '10 month');
+ apm_eval_partbound 
+--------------------
+                  1
+(1 row)
+
+-- should return 2 because now() + 2000 years is inside this partition boundary
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_min_1_prt_min_part'::regclass::oid, '2000 years');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+-- should return partition boundary in tz
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_min2_1_prt_min_part'::regclass::oid);
+              apm_partition_boundary               
+---------------------------------------------------
+ (-infinity,"Mon Mar 02 11:55:58.000001 2020 PST")
+(1 row)
+
+-- MAXVALUE + MINVALUE
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.by_min_max;
+NOTICE:  table "by_min_max" does not exist, skipping
+CREATE TABLE apm_test.by_min_max (ts timestamp, region text)
+DISTRIBUTED BY (region)
+PARTITION BY RANGE (ts) (DEFAULT PARTITION others);
+ALTER TABLE apm_test.by_min_max ADD PARTITION all_part START ('-infinity'::timestamp) INCLUSIVE;
+-- end_ignore
+-- should return partition boundary in tz
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_min_max_1_prt_all_part'::regclass::oid);
+ apm_partition_boundary 
+------------------------
+ (-infinity,infinity)
+(1 row)
+
+-- should always return 2
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_min_max_1_prt_all_part'::regclass::oid, '- 6000 years');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_min_max_1_prt_all_part'::regclass::oid, '6000 years');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+DROP TABLE IF EXISTS apm_test.by_max_min;
+NOTICE:  table "by_max_min" does not exist, skipping
+CREATE TABLE apm_test.by_max_min (ts timestamp, region text)
+DISTRIBUTED BY (region)
+PARTITION BY RANGE (ts) (DEFAULT PARTITION others);
+ALTER TABLE apm_test.by_max_min ADD PARTITION all_part END ('infinity'::timestamp) EXCLUSIVE;
+-- should return partition boundary in tz
+SELECT matrixts_internal.apm_partition_boundary('apm_test.by_max_min_1_prt_all_part'::regclass::oid);
+ apm_partition_boundary 
+------------------------
+ (-infinity,infinity)
+(1 row)
+
+-- should always return 2
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_max_min_1_prt_all_part'::regclass::oid, '- 6000 years');
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+SELECT matrixts_internal.apm_eval_partbound('apm_test.by_max_min_1_prt_all_part'::regclass::oid, '6000 years', now());
+ apm_eval_partbound 
+--------------------
+                  2
+(1 row)
+
+---------------------------------------------
+-- apm_is_valid_partition_period
+---------------------------------------------
+-- should return NULL
+SELECT matrixts_internal.apm_is_valid_partition_period(NULL);
+ apm_is_valid_partition_period 
+-------------------------------
+ 
+(1 row)
+
+-- should raise error
+SELECT matrixts_internal.apm_is_valid_partition_period('apple pie');
+ERROR:  invalid input syntax for type interval: "apple pie"
+LINE 1: ...T matrixts_internal.apm_is_valid_partition_period('apple pie...
+                                                             ^
+-- should return true for supported interval
+SELECT matrixts_internal.apm_is_valid_partition_period('1 day');
+ apm_is_valid_partition_period 
+-------------------------------
+ t
+(1 row)
+
+SELECT matrixts_internal.apm_is_valid_partition_period('1 day 1 second');
+ apm_is_valid_partition_period 
+-------------------------------
+ t
+(1 row)
+
+SELECT matrixts_internal.apm_is_valid_partition_period('1 week');
+ apm_is_valid_partition_period 
+-------------------------------
+ t
+(1 row)
+
+SELECT matrixts_internal.apm_is_valid_partition_period('1 week 1 hour');
+ apm_is_valid_partition_period 
+-------------------------------
+ t
+(1 row)
+
+SELECT matrixts_internal.apm_is_valid_partition_period('1 month');
+ apm_is_valid_partition_period 
+-------------------------------
+ t
+(1 row)
+
+SELECT matrixts_internal.apm_is_valid_partition_period('3 month');
+ apm_is_valid_partition_period 
+-------------------------------
+ t
+(1 row)
+
+SELECT matrixts_internal.apm_is_valid_partition_period('1 year');
+ apm_is_valid_partition_period 
+-------------------------------
+ t
+(1 row)
+
+-- should return false for unsupported interval
+SELECT matrixts_internal.apm_is_valid_partition_period('2 month');
+NOTICE:  MatrixTS: cannot use 2 month as period specification.
+HINT:  Only 1/3/12 months is supported.
+ apm_is_valid_partition_period 
+-------------------------------
+ f
+(1 row)
+
+SELECT matrixts_internal.apm_is_valid_partition_period('2 year');
+NOTICE:  MatrixTS: cannot use 24 month as period specification.
+HINT:  Only 1/3/12 months is supported.
+ apm_is_valid_partition_period 
+-------------------------------
+ f
+(1 row)
+
+SELECT matrixts_internal.apm_is_valid_partition_period('1 month 1 min');
+NOTICE:  MatrixTS: cannot use month with additional day/time specification as partition period.
+DETAIL:  Such as "1 month 1 day", "1 year 1 second", nobody can do.
+ apm_is_valid_partition_period 
+-------------------------------
+ f
+(1 row)
+
+SELECT matrixts_internal.apm_is_valid_partition_period('3 month 1 second');
+NOTICE:  MatrixTS: cannot use month with additional day/time specification as partition period.
+DETAIL:  Such as "1 month 1 day", "1 year 1 second", nobody can do.
+ apm_is_valid_partition_period 
+-------------------------------
+ f
+(1 row)
+
+SELECT matrixts_internal.apm_is_valid_partition_period('1 year 3 day');
+NOTICE:  MatrixTS: cannot use month with additional day/time specification as partition period.
+DETAIL:  Such as "1 month 1 day", "1 year 1 second", nobody can do.
+ apm_is_valid_partition_period 
+-------------------------------
+ f
+(1 row)
+
+---------------------------------------------
+-- apm_time_trunc
+---------------------------------------------
+-- should return NULL
+SELECT matrixts_internal.apm_time_trunc(NULL, '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc(NULL, '2017-03-02 01:30:42'::timestamp);
+ apm_time_trunc 
+----------------
+ 
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc(NULL, '2017-03-02 01:30:42+08:00'::timestamptz);
+ apm_time_trunc 
+----------------
+ 
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day', NULL::date);
+ apm_time_trunc 
+----------------
+ 
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day', NULL::timestamp);
+ apm_time_trunc 
+----------------
+ 
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day', NULL::timestamptz);
+ apm_time_trunc 
+----------------
+ 
+(1 row)
+
+-- UTC timezone
+BEGIN;
+SET timezone TO UTC;
+SELECT matrixts_internal.apm_time_trunc('1 day', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 03-02-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 02-27-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 03-01-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('3 month', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 01-01-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 year', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 01-01-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Thu Mar 02 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day 1 second', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Wed Mar 01 01:44:27 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Mon Feb 27 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week 1 hour', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Wed Mar 01 02:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Wed Mar 01 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('3 month', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Sun Jan 01 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 year', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Sun Jan 01 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Wed Mar 01 00:00:00 2017 UTC
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day 1 second', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Wed Mar 01 01:44:27 2017 UTC
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Mon Feb 27 00:00:00 2017 UTC
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week 1 hour', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Wed Mar 01 02:00:00 2017 UTC
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Wed Mar 01 00:00:00 2017 UTC
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('3 month', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Sun Jan 01 00:00:00 2017 UTC
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 year', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Sun Jan 01 00:00:00 2017 UTC
+(1 row)
+
+ROLLBACK;
+-- timezone +08:00
+BEGIN;
+SET timezone TO 'Asia/Shanghai';
+SELECT matrixts_internal.apm_time_trunc('1 day', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 03-02-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 02-27-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 03-01-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('3 month', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 01-01-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 year', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 01-01-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Thu Mar 02 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day 1 second', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Wed Mar 01 01:44:27 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Mon Feb 27 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week 1 hour', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Wed Mar 01 02:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Wed Mar 01 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('3 month', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Sun Jan 01 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 year', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Sun Jan 01 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Wed Mar 01 08:00:00 2017 CST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day 1 second', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Wed Mar 01 09:44:27 2017 CST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Mon Feb 27 08:00:00 2017 CST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week 1 hour', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Wed Mar 01 10:00:00 2017 CST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Wed Mar 01 00:00:00 2017 CST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('3 month', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Sun Jan 01 00:00:00 2017 CST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 year', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Sun Jan 01 00:00:00 2017 CST
+(1 row)
+
+ROLLBACK;
+-- timezone -05:00
+BEGIN;
+SET timezone TO 'America/Detroit';
+SELECT matrixts_internal.apm_time_trunc('1 day', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 03-02-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 02-27-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 03-01-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('3 month', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 01-01-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 year', '2017-03-02'::date);
+ apm_time_trunc 
+----------------
+ 01-01-2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Thu Mar 02 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day 1 second', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Wed Mar 01 01:44:27 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Mon Feb 27 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week 1 hour', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Wed Mar 01 02:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Wed Mar 01 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('3 month', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Sun Jan 01 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 year', '2017-03-02 01:30:42'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Sun Jan 01 00:00:00 2017
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Tue Feb 28 19:00:00 2017 EST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 day 1 second', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Tue Feb 28 20:44:27 2017 EST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Sun Feb 26 19:00:00 2017 EST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 week 1 hour', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Tue Feb 28 21:00:00 2017 EST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Wed Mar 01 00:00:00 2017 EST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('3 month', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Sun Jan 01 00:00:00 2017 EST
+(1 row)
+
+SELECT matrixts_internal.apm_time_trunc('1 year', '2017-03-02 01:30:42+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Sun Jan 01 00:00:00 2017 EST
+(1 row)
+
+ROLLBACK;
+-- timezone behavior difference
+BEGIN;
+SET timezone TO 'Asia/Shanghai';
+-- should be 2017-03-01 00:00:00
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-01 00:00:00'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Wed Mar 01 00:00:00 2017
+(1 row)
+
+-- should be 2017-03-01 00:00:00+08
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-01 00:00:00+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Wed Mar 01 00:00:00 2017 CST
+(1 row)
+
+SET timezone TO 'America/Detroit';
+-- should be 2017-03-01 00:00:00
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-01 00:00:00'::timestamp);
+      apm_time_trunc      
+--------------------------
+ Wed Mar 01 00:00:00 2017
+(1 row)
+
+-- should be 2017-02-01 00:00:00-05
+SELECT matrixts_internal.apm_time_trunc('1 month', '2017-03-01 00:00:00+08:00'::timestamptz);
+        apm_time_trunc        
+------------------------------
+ Wed Feb 01 00:00:00 2017 EST
+(1 row)
+
+ROLLBACK;
+-- should return error for invalid input
+SELECT matrixts_internal.apm_time_trunc('1 hour', '2017-03-02'::date);
+ERROR:  interval must not have sub-day precision
+SELECT matrixts_internal.apm_time_trunc('1 day 1 second', '2017-03-02'::date);
+ERROR:  interval must be a multiple of a day
+SELECT matrixts_internal.apm_time_trunc('1 week 1 hour', '2017-03-02'::date);
+ERROR:  interval must be a multiple of a day
+SELECT matrixts_internal.apm_time_trunc('2 month', '2017-03-02'::date);
+ERROR:  MatrixTS: unsupported interval
+HINT:  please use '1 month/quarter/year' as period
+SELECT matrixts_internal.apm_time_trunc('2 year', '2017-03-02 01:30:42+08:00'::timestamptz);
+ERROR:  MatrixTS: unsupported interval
+HINT:  please use '1 month/quarter/year' as period
+SELECT matrixts_internal.apm_time_trunc('1 month 1 min', '2017-03-02 01:30:42'::timestamp);
+ERROR:  MatrixTS: cannot use month with time spec as partition period
+SELECT matrixts_internal.apm_time_trunc('3 month 1 second', '2017-03-02 01:30:42'::timestamp);
+ERROR:  MatrixTS: cannot use month with time spec as partition period
+SELECT matrixts_internal.apm_time_trunc('1 year 3 day', '2017-03-02'::date);
+ERROR:  MatrixTS: cannot use month with time spec as partition period
+---------------------------------------------------------
+-- _unique_partition_name
+---------------------------------------------------------
+-- start_ignore
+DROP TABLE IF EXISTS apm_test.abc;
+NOTICE:  table "abc" does not exist, skipping
+DROP TABLE IF EXISTS apm_test.abc_1_prt_1;
+NOTICE:  table "abc_1_prt_1" does not exist, skipping
+DROP TABLE IF EXISTS apm_test."甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾_1_prt_1"(id int);
+ERROR:  syntax error at or near "("
+LINE 1: ...test."甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾_1_prt_1"(id int);
+                                                              ^
+DROP TABLE IF EXISTS apm_test."ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABC_1_prt_1"(id int);
+ERROR:  syntax error at or near "("
+LINE 1: ...NOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABC_1_prt_1"(id int);
+                                                              ^
+-- end_ignore
+-- should return abc_1_prt_1
+SELECT *, length(s), octet_length(s)  FROM matrixts_internal._unique_partition_name('abc') s;
+      s      | length | octet_length 
+-------------+--------+--------------
+ abc_1_prt_1 |     11 |           11
+(1 row)
+
+CREATE TABLE apm_test.abc_1_prt_1(id int);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'id' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+-- should return abc_1_prt_2
+SELECT *, length(s), octet_length(s)  FROM matrixts_internal._unique_partition_name('abc') s;
+      s      | length | octet_length 
+-------------+--------+--------------
+ abc_1_prt_2 |     11 |           11
+(1 row)
+
+-- should return 甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾_1_prt_1
+SELECT *, length(s), octet_length(s) FROM matrixts_internal._unique_partition_name('甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾夫人仙逝扬州城 冷子兴演说荣国府 托内兄如海荐西宾 接外孙贾母惜孤女') s;
+                      s                       | length | octet_length 
+----------------------------------------------+--------+--------------
+ 甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾_1_prt_1 |     27 |           61
+(1 row)
+
+CREATE TABLE apm_test."甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾_1_prt_1"(id int);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'id' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+-- should return 甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾_1_prt_2
+SELECT *, length(s), octet_length(s) FROM matrixts_internal._unique_partition_name('甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾夫人仙逝扬州城 冷子兴演说荣国府 托内兄如海荐西宾 接外孙贾母惜孤女') s;
+                      s                       | length | octet_length 
+----------------------------------------------+--------+--------------
+ 甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾_1_prt_2 |     27 |           61
+(1 row)
+
+-- should return ABC_1_prt_1
+SELECT *, length(s), octet_length(s)  FROM matrixts_internal._unique_partition_name('ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ') s;
+                                s                                | length | octet_length 
+-----------------------------------------------------------------+--------+--------------
+ ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABC_1_prt_1 |     63 |           63
+(1 row)
+
+CREATE TABLE apm_test."ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABC_1_prt_1"(id int);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'id' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+-- should return ABC_1_prt_2
+SELECT *, length(s), octet_length(s)  FROM matrixts_internal._unique_partition_name('ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ') s;
+                                s                                | length | octet_length 
+-----------------------------------------------------------------+--------+--------------
+ ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABC_1_prt_2 |     63 |           63
+(1 row)
+
+-- should cut into <= 63 bytes
+SELECT *, length(s), octet_length(s) FROM matrixts_internal._unique_partition_name('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') s;
+                                s                                | length | octet_length 
+-----------------------------------------------------------------+--------+--------------
+ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_1_prt_1 |     63 |           63
+(1 row)
+
+SELECT *, length(s), octet_length(s) FROM matrixts_internal._unique_partition_name('a甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾夫人仙逝扬州城 冷子兴演说荣国府 托内兄如海荐西宾 接外孙贾母惜孤女') s;
+                       s                       | length | octet_length 
+-----------------------------------------------+--------+--------------
+ a甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾_1_prt_1 |     28 |           62
+(1 row)
+
+SELECT *, length(s), octet_length(s) FROM matrixts_internal._unique_partition_name('abc甄士隐梦幻识通灵 贾雨村风尘怀闺秀 贾夫人仙逝扬州城 冷子兴演说荣国府 托内兄如海荐西宾 接外孙贾母惜孤女') s;
+                       s                       | length | octet_length 
+-----------------------------------------------+--------+--------------
+ abc甄士隐梦幻识通灵 贾雨村风尘怀闺秀 _1_prt_1 |     29 |           61
+(1 row)
+
+SELECT *, length(s), octet_length(s) FROM matrixts_internal._unique_partition_name('''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''') s;
+                                s                                | length | octet_length 
+-----------------------------------------------------------------+--------+--------------
+ '''''''''''''''''''''''''''''''''''''''''''''''''''''''_1_prt_1 |     63 |           63
+(1 row)
+
+SELECT *, length(s), octet_length(s) FROM matrixts_internal._unique_partition_name('"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""') s;
+                                s                                | length | octet_length 
+-----------------------------------------------------------------+--------+--------------
+ """""""""""""""""""""""""""""""""""""""""""""""""""""""_1_prt_1 |     63 |           63
+(1 row)
+

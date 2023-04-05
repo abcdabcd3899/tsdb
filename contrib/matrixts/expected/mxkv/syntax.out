@@ -1,0 +1,1404 @@
+\out /dev/null
+select * from test_mxkv_settings;
+\out
+\gset
+--
+-- mxkv_text allow any type of values
+--
+-- convert from text, then convert back to text
+select '{ "k101": "foobar", "k102": 10, "k103": 12.5 }'::mxkv_text;
+                    mxkv_text                     
+--------------------------------------------------
+ {"k101": "foobar", "k102": "10", "k103": "12.5"}
+(1 row)
+
+-- allow empty records
+select '{ }'::mxkv_text;
+ mxkv_text 
+-----------
+ {}
+(1 row)
+
+-- the records are sorted by key order
+select '{ "k103": 12.5, "k101": "foobar", "k102": 10 }'::mxkv_text;
+                    mxkv_text                     
+--------------------------------------------------
+ {"k101": "foobar", "k102": "10", "k103": "12.5"}
+(1 row)
+
+-- null value is allowed, however it is not stored
+select '{ "k101": null }'::mxkv_text;
+ mxkv_text 
+-----------
+ {}
+(1 row)
+
+-- convert repeatedly should work
+select :full_records_i4::mxkv_text::text::mxkv_text->'k9876';
+ ?column? 
+----------
+ 9876
+(1 row)
+
+-- negative: only allow registered keys
+select '{ "no such key": 100 }'::mxkv_text;
+ERROR:  unknown key "no such key"
+LINE 1: select '{ "no such key": 100 }'::mxkv_text;
+               ^
+DETAIL:  The key is not imported yet
+HINT:  Import the keys with the mxkv_import_keys() function
+-- negative: do not allow duplicate keys
+select '{ "k101": 1, "k101": 2 }'::mxkv_text;
+ERROR:  cannot insert duplicate keys to mxkv
+LINE 1: select '{ "k101": 1, "k101": 2 }'::mxkv_text;
+               ^
+select '{ "k101": 1, "k101": 1 }'::mxkv_text;
+ERROR:  cannot insert duplicate keys to mxkv
+LINE 1: select '{ "k101": 1, "k101": 1 }'::mxkv_text;
+               ^
+select '{ "k101": null, "k101": 1 }'::mxkv_text;
+ERROR:  cannot insert duplicate keys to mxkv
+LINE 1: select '{ "k101": null, "k101": 1 }'::mxkv_text;
+               ^
+select '{ "k101": 1, "k101": null }'::mxkv_text;
+ERROR:  cannot insert duplicate keys to mxkv
+LINE 1: select '{ "k101": 1, "k101": null }'::mxkv_text;
+               ^
+select '{ "k101": null, "k101": null }'::mxkv_text;
+ERROR:  cannot insert duplicate keys to mxkv
+LINE 1: select '{ "k101": null, "k101": null }'::mxkv_text;
+               ^
+-- negative: do not allow nesting
+select '{ "k101: { "k102": 2 } }'::mxkv_text;
+ERROR:  invalid input syntax for type json
+LINE 1: select '{ "k101: { "k102": 2 } }'::mxkv_text;
+               ^
+DETAIL:  Token "k102" is invalid.
+CONTEXT:  JSON data, line 1: { "k101: { "k102...
+select '{ "k101: [ 1, 2, 3 ] }'::mxkv_text;
+ERROR:  invalid input syntax for type json
+LINE 1: select '{ "k101: [ 1, 2, 3 ] }'::mxkv_text;
+               ^
+DETAIL:  Token ""k101: [ 1, 2, 3 ] }" is invalid.
+CONTEXT:  JSON data, line 1: { "k101: [ 1, 2, 3 ] }
+-- negative: must be a json object
+select '10'::mxkv_text;
+ERROR:  cannot convert an scalar to mxkv
+LINE 1: select '10'::mxkv_text;
+               ^
+select '"abc"'::mxkv_text;
+ERROR:  cannot convert an scalar to mxkv
+LINE 1: select '"abc"'::mxkv_text;
+               ^
+select '[1, 2, 3]'::mxkv_text;
+ERROR:  cannot convert an array to mxkv
+LINE 1: select '[1, 2, 3]'::mxkv_text;
+               ^
+select 'null'::mxkv_text;
+ERROR:  cannot convert an scalar to mxkv
+LINE 1: select 'null'::mxkv_text;
+               ^
+--
+-- mxkv_int4 allow int4 values
+--
+-- convert from text, then convert back to text
+select '{ "k101": -1, "k102": 10, "k103": 100 }'::mxkv_int4;
+               mxkv_int4               
+---------------------------------------
+ {"k101": -1, "k102": 10, "k103": 100}
+(1 row)
+
+-- allow empty records
+select '{ }'::mxkv_int4;
+ mxkv_int4 
+-----------
+ {}
+(1 row)
+
+-- allow anything that can be fully converted to an integer
+select '{ "k101": "10" }'::mxkv_int4;
+  mxkv_int4   
+--------------
+ {"k101": 10}
+(1 row)
+
+select '{ "k101": "  10  " }'::mxkv_int4;
+  mxkv_int4   
+--------------
+ {"k101": 10}
+(1 row)
+
+-- convert repeatedly should work
+select :full_records_i4::mxkv_int4::text::mxkv_int4->'k9876';
+ ?column? 
+----------
+     9876
+(1 row)
+
+-- null value is allowed, however it is not stored
+select '{ "k101": null }'::mxkv_int4;
+ mxkv_int4 
+-----------
+ {}
+(1 row)
+
+-- negative: only allow int4 values
+select '{ "k101": 10.2 }'::mxkv_int4;
+ERROR:  invalid input syntax for type integer: "10.2"
+LINE 1: select '{ "k101": 10.2 }'::mxkv_int4;
+               ^
+select '{ "k101": "" }'::mxkv_int4;
+ERROR:  invalid input syntax for type integer: ""
+LINE 1: select '{ "k101": "" }'::mxkv_int4;
+               ^
+select '{ "k101": "10 abc" }'::mxkv_int4;
+ERROR:  invalid input syntax for type integer: "10 abc"
+LINE 1: select '{ "k101": "10 abc" }'::mxkv_int4;
+               ^
+select '{ "k101": "abc" }'::mxkv_int4;
+ERROR:  invalid input syntax for type integer: "abc"
+LINE 1: select '{ "k101": "abc" }'::mxkv_int4;
+               ^
+-- negative: do not allow scientific notation
+select '{ "k101": 10e3 }'::mxkv_int4;
+ERROR:  invalid input syntax for type integer: "10e3"
+LINE 1: select '{ "k101": 10e3 }'::mxkv_int4;
+               ^
+--
+-- mxkv_float4 allow float4 values
+--
+-- convert from text, then convert back to text
+select '{ "k101": -1.1, "k102": 10.2, "k103": 100.00003 }'::mxkv_float4;
+                   mxkv_float4                   
+-------------------------------------------------
+ {"k101": -1.1, "k102": 10.2, "k103": 100.00003}
+(1 row)
+
+-- allow empty records
+select '{ }'::mxkv_float4;
+ mxkv_float4 
+-------------
+ {}
+(1 row)
+
+-- allow anything that can be fully converted to an integer
+select '{ "k101": "10.101" }'::mxkv_float4;
+   mxkv_float4    
+------------------
+ {"k101": 10.101}
+(1 row)
+
+select '{ "k101": "  10.101  " }'::mxkv_float4;
+   mxkv_float4    
+------------------
+ {"k101": 10.101}
+(1 row)
+
+-- null value is allowed, however it is not stored
+select '{ "k101": null }'::mxkv_float4;
+ mxkv_float4 
+-------------
+ {}
+(1 row)
+
+-- integer values are also allowed
+select '{ "k101": 123 }'::mxkv_float4;
+  mxkv_float4  
+---------------
+ {"k101": 123}
+(1 row)
+
+-- allow scientific notation
+select '{ "k101": 10e3 }'::mxkv_float4;
+   mxkv_float4   
+-----------------
+ {"k101": 10000}
+(1 row)
+
+select '{ "k101": 10e-3 }'::mxkv_float4;
+  mxkv_float4   
+----------------
+ {"k101": 0.01}
+(1 row)
+
+-- convert repeatedly should work
+select :full_records_i4::mxkv_float4::text::mxkv_float4->'k9876';
+ ?column? 
+----------
+     9876
+(1 row)
+
+-- negative: only allow int/float values
+select '{ "k101": "" }'::mxkv_float4;
+ERROR:  invalid input syntax for type real: ""
+LINE 1: select '{ "k101": "" }'::mxkv_float4;
+               ^
+select '{ "k101": "10 abc" }'::mxkv_float4;
+ERROR:  invalid input syntax for type real: "10 abc"
+LINE 1: select '{ "k101": "10 abc" }'::mxkv_float4;
+               ^
+select '{ "k101": "abc" }'::mxkv_float4;
+ERROR:  invalid input syntax for type real: "abc"
+LINE 1: select '{ "k101": "abc" }'::mxkv_float4;
+               ^
+--
+-- mxkv_float8 allow float8 values
+--
+-- convert from text, then convert back to text
+select '{ "k101": -1.1, "k102": 10.2, "k103": 100.00003 }'::mxkv_float8;
+                   mxkv_float8                   
+-------------------------------------------------
+ {"k101": -1.1, "k102": 10.2, "k103": 100.00003}
+(1 row)
+
+-- allow empty records
+select '{ }'::mxkv_float8;
+ mxkv_float8 
+-------------
+ {}
+(1 row)
+
+-- allow anything that can be fully converted to an integer
+select '{ "k101": "10.101" }'::mxkv_float8;
+   mxkv_float8    
+------------------
+ {"k101": 10.101}
+(1 row)
+
+select '{ "k101": "  10.101  " }'::mxkv_float8;
+   mxkv_float8    
+------------------
+ {"k101": 10.101}
+(1 row)
+
+-- null value is allowed, however it is not stored
+select '{ "k101": null }'::mxkv_float8;
+ mxkv_float8 
+-------------
+ {}
+(1 row)
+
+-- integer values are also allowed
+select '{ "k101": 123 }'::mxkv_float8;
+  mxkv_float8  
+---------------
+ {"k101": 123}
+(1 row)
+
+-- allow scientific notation
+select '{ "k101": 10e3 }'::mxkv_float8;
+   mxkv_float8   
+-----------------
+ {"k101": 10000}
+(1 row)
+
+select '{ "k101": 10e-3 }'::mxkv_float8;
+  mxkv_float8   
+----------------
+ {"k101": 0.01}
+(1 row)
+
+-- convert repeatedly should work
+select :full_records_i4::mxkv_float8::text::mxkv_float8->'k9876';
+ ?column? 
+----------
+     9876
+(1 row)
+
+-- negative: only allow int/float values
+select '{ "k101": "" }'::mxkv_float8;
+ERROR:  invalid input syntax for type float8: ""
+LINE 1: select '{ "k101": "" }'::mxkv_float8;
+               ^
+select '{ "k101": "10 abc" }'::mxkv_float8;
+ERROR:  invalid input syntax for type float8: "10 abc"
+LINE 1: select '{ "k101": "10 abc" }'::mxkv_float8;
+               ^
+select '{ "k101": "abc" }'::mxkv_float8;
+ERROR:  invalid input syntax for type float8: "abc"
+LINE 1: select '{ "k101": "abc" }'::mxkv_float8;
+               ^
+--
+-- mxkv_float4(scale) allow scaled float4 values
+--
+-- convert from text, then convert back to text
+select '{ "k101": -1.1, "k102": 10.2, "k103": 100.00003 }'::mxkv_float4(5);
+                   mxkv_float4                   
+-------------------------------------------------
+ {"k101": -1.1, "k102": 10.2, "k103": 100.00003}
+(1 row)
+
+-- allow empty records
+select '{ }'::mxkv_float4(2);
+ mxkv_float4 
+-------------
+ {}
+(1 row)
+
+-- allow anything that can be fully converted to an integer
+select '{ "k101": "10.101" }'::mxkv_float4(3);
+   mxkv_float4    
+------------------
+ {"k101": 10.101}
+(1 row)
+
+select '{ "k101": "  10.101  " }'::mxkv_float4(3);
+   mxkv_float4    
+------------------
+ {"k101": 10.101}
+(1 row)
+
+-- null value is allowed, however it is not stored
+select '{ "k101": null }'::mxkv_float4(3);
+ mxkv_float4 
+-------------
+ {}
+(1 row)
+
+-- integer values are also allowed
+select '{ "k101": 123 }'::mxkv_float4(3);
+  mxkv_float4  
+---------------
+ {"k101": 123}
+(1 row)
+
+-- allow scientific notation
+select '{ "k101": 10e3 }'::mxkv_float4(3);
+   mxkv_float4   
+-----------------
+ {"k101": 10000}
+(1 row)
+
+select '{ "k101": 10e-3 }'::mxkv_float4(3);
+  mxkv_float4   
+----------------
+ {"k101": 0.01}
+(1 row)
+
+-- convert repeatedly should work
+select :full_records_i4::mxkv_float4::text::mxkv_float4(3)->'k9876';
+ ?column? 
+----------
+     9876
+(1 row)
+
+-- negative: only allow int/float values
+select '{ "k101": "" }'::mxkv_float4(3);
+ERROR:  invalid input syntax for type real: ""
+LINE 1: select '{ "k101": "" }'::mxkv_float4(3);
+               ^
+select '{ "k101": "10 abc" }'::mxkv_float4(3);
+ERROR:  invalid input syntax for type real: "10 abc"
+LINE 1: select '{ "k101": "10 abc" }'::mxkv_float4(3);
+               ^
+select '{ "k101": "abc" }'::mxkv_float4(3);
+ERROR:  invalid input syntax for type real: "abc"
+LINE 1: select '{ "k101": "abc" }'::mxkv_float4(3);
+               ^
+-- convert between different scales should work
+select '{ "k101": 12.34, "k102": -56.78 }'::mxkv_float4(2)::mxkv_float4::mxkv_float4(4)::mxkv_float4(3);
+           mxkv_float4           
+---------------------------------
+ {"k101": 12.34, "k102": -56.78}
+(1 row)
+
+-- auto round to the specific scale
+select '{ "k101": 12.34 }'::mxkv_float4(1);
+  mxkv_float4   
+----------------
+ {"k101": 12.3}
+(1 row)
+
+-- min & max at different scales
+-- note: the real range for mxkv_float4(0) is [-2147483648,2147483647], however
+-- the input process is mxkv_in(typmod=-1) -> mxkv_scale(typmod), the precision
+-- is lost during the first step, the range becomes
+-- [-2.1474836e+09,2.1474836e+09], it is out of range in the step, so in
+-- practice the valid range is [-2.1474835e+09,2.1474835e+09].
+select '{ "k1": -2147483500, "k2": 2147483500 }'::mxkv_float4(0);
+                 mxkv_float4                 
+---------------------------------------------
+ {"k1": -2.1474835e+09, "k2": 2.1474835e+09}
+(1 row)
+
+select '{ "k1": -214748350.0, "k2": 214748350.0 }'::mxkv_float4(1);
+                 mxkv_float4                 
+---------------------------------------------
+ {"k1": -2.1474835e+08, "k2": 2.1474835e+08}
+(1 row)
+
+select '{ "k1": -21474835.00, "k2": 21474835.00 }'::mxkv_float4(2);
+                 mxkv_float4                 
+---------------------------------------------
+ {"k1": -2.1474836e+07, "k2": 2.1474836e+07}
+(1 row)
+
+select '{ "k1": -2147483.500, "k2": 2147483.500 }'::mxkv_float4(3);
+                 mxkv_float4                 
+---------------------------------------------
+ {"k1": -2.1474835e+06, "k2": 2.1474835e+06}
+(1 row)
+
+select '{ "k1": -214748.3500, "k2": 214748.3500 }'::mxkv_float4(4);
+             mxkv_float4             
+-------------------------------------
+ {"k1": -214748.34, "k2": 214748.34}
+(1 row)
+
+select '{ "k1": -21474.83500, "k2": 21474.83500 }'::mxkv_float4(5);
+             mxkv_float4             
+-------------------------------------
+ {"k1": -21474.836, "k2": 21474.836}
+(1 row)
+
+select '{ "k1": -2147.483500, "k2": 2147.483500 }'::mxkv_float4(6);
+             mxkv_float4             
+-------------------------------------
+ {"k1": -2147.4834, "k2": 2147.4834}
+(1 row)
+
+select '{ "k1": -214.7483500, "k2": 214.7483500 }'::mxkv_float4(7);
+             mxkv_float4             
+-------------------------------------
+ {"k1": -214.74835, "k2": 214.74835}
+(1 row)
+
+select '{ "k1": -21.47483500, "k2": 21.47483500 }'::mxkv_float4(8);
+             mxkv_float4             
+-------------------------------------
+ {"k1": -21.474834, "k2": 21.474834}
+(1 row)
+
+select '{ "k1": -2.147483500, "k2": 2.147483500 }'::mxkv_float4(9);
+             mxkv_float4             
+-------------------------------------
+ {"k1": -2.1474836, "k2": 2.1474836}
+(1 row)
+
+select '{ "k1": -0.2147483500, "k2": 0.2147483500 }'::mxkv_float4(10);
+              mxkv_float4              
+---------------------------------------
+ {"k1": -0.21474835, "k2": 0.21474835}
+(1 row)
+
+-- allow storing integers with scale 0
+select '{ "k101": 12 }'::mxkv_float4(0);
+ mxkv_float4  
+--------------
+ {"k101": 12}
+(1 row)
+
+-- trim ending zeros
+select '{ "k101": 12.00 }'::mxkv_float4(0);
+ mxkv_float4  
+--------------
+ {"k101": 12}
+(1 row)
+
+select '{ "k101": 12.300 }'::mxkv_float4(1);
+  mxkv_float4   
+----------------
+ {"k101": 12.3}
+(1 row)
+
+-- a value can be stored with higher scales
+select '{ "k101": 12.034 }'::mxkv_float4(3);
+   mxkv_float4    
+------------------
+ {"k101": 12.034}
+(1 row)
+
+select '{ "k101": 12.034 }'::mxkv_float4(4);
+   mxkv_float4    
+------------------
+ {"k101": 12.034}
+(1 row)
+
+select '{ "k101": 12.034 }'::mxkv_float4(5);
+   mxkv_float4    
+------------------
+ {"k101": 12.034}
+(1 row)
+
+select :full_records_i4::mxkv_float4(0)->'k100';
+ ?column? 
+----------
+      100
+(1 row)
+
+select :half_records_i4::mxkv_float4(0)->'k100';
+ ?column? 
+----------
+     -100
+(1 row)
+
+select :full_records_f4::mxkv_float4(2)->'k100';
+ ?column? 
+----------
+        1
+(1 row)
+
+select :half_records_f4::mxkv_float4(2)->'k100';
+ ?column? 
+----------
+       -1
+(1 row)
+
+--
+-- mxkv_float8(scale) allow scaled float8 values
+--
+-- convert from text, then convert back to text
+select '{ "k101": -1.1, "k102": 10.2, "k103": 100.00003 }'::mxkv_float8(5);
+                   mxkv_float8                   
+-------------------------------------------------
+ {"k101": -1.1, "k102": 10.2, "k103": 100.00003}
+(1 row)
+
+-- allow empty records
+select '{ }'::mxkv_float8(2);
+ mxkv_float8 
+-------------
+ {}
+(1 row)
+
+-- allow anything that can be fully converted to an integer
+select '{ "k101": "10.101" }'::mxkv_float8(3);
+   mxkv_float8    
+------------------
+ {"k101": 10.101}
+(1 row)
+
+select '{ "k101": "  10.101  " }'::mxkv_float8(3);
+   mxkv_float8    
+------------------
+ {"k101": 10.101}
+(1 row)
+
+-- null value is allowed, however it is not stored
+select '{ "k101": null }'::mxkv_float8(3);
+ mxkv_float8 
+-------------
+ {}
+(1 row)
+
+-- integer values are also allowed
+select '{ "k101": 123 }'::mxkv_float8(3);
+  mxkv_float8  
+---------------
+ {"k101": 123}
+(1 row)
+
+-- allow scientific notation
+select '{ "k101": 10e3 }'::mxkv_float8(3);
+   mxkv_float8   
+-----------------
+ {"k101": 10000}
+(1 row)
+
+select '{ "k101": 10e-3 }'::mxkv_float8(3);
+  mxkv_float8   
+----------------
+ {"k101": 0.01}
+(1 row)
+
+-- convert repeatedly should work
+select :full_records_i4::mxkv_float8::text::mxkv_float8(3)->'k9876';
+ ?column? 
+----------
+     9876
+(1 row)
+
+-- negative: only allow int/float values
+select '{ "k101": "" }'::mxkv_float8(3);
+ERROR:  invalid input syntax for type float8: ""
+LINE 1: select '{ "k101": "" }'::mxkv_float8(3);
+               ^
+select '{ "k101": "10 abc" }'::mxkv_float8(3);
+ERROR:  invalid input syntax for type float8: "10 abc"
+LINE 1: select '{ "k101": "10 abc" }'::mxkv_float8(3);
+               ^
+select '{ "k101": "abc" }'::mxkv_float8(3);
+ERROR:  invalid input syntax for type float8: "abc"
+LINE 1: select '{ "k101": "abc" }'::mxkv_float8(3);
+               ^
+-- convert between different scales should work
+select '{ "k101": 12.34, "k102": -56.78 }'::mxkv_float8(2)::mxkv_float8::mxkv_float8(4)::mxkv_float8(3);
+           mxkv_float8           
+---------------------------------
+ {"k101": 12.34, "k102": -56.78}
+(1 row)
+
+-- auto round to the specific scale
+select '{ "k101": 12.34 }'::mxkv_float8(1);
+  mxkv_float8   
+----------------
+ {"k101": 12.3}
+(1 row)
+
+-- min & max at different scales
+-- note: the real range for mxkv_float8(0) is
+-- [-9223372036854775808,9223372036854775807], however the input process is
+-- mxkv_in(typmod=-1) -> mxkv_scale(typmod), the precision is lost during the
+-- first step, the range becomes
+-- [-9.223372036854776e+18,9.223372036854776e+18], it is out of range in the
+-- step, so in practice the valid range is
+-- [-9.223372036854774e+18,9.223372036854774e+18].
+select '{ "k1": -9223372036854774000, "k2": 9223372036854774000 }'::mxkv_float8(0);
+                         mxkv_float8                         
+-------------------------------------------------------------
+ {"k1": -9.223372036854774e+18, "k2": 9.223372036854774e+18}
+(1 row)
+
+select '{ "k1": -922337203685477400.0, "k2": 922337203685477400.0 }'::mxkv_float8(1);
+                         mxkv_float8                         
+-------------------------------------------------------------
+ {"k1": -9.223372036854774e+17, "k2": 9.223372036854774e+17}
+(1 row)
+
+select '{ "k1": -92233720368547740.00, "k2": 92233720368547740.00 }'::mxkv_float8(2);
+                         mxkv_float8                         
+-------------------------------------------------------------
+ {"k1": -9.223372036854774e+16, "k2": 9.223372036854774e+16}
+(1 row)
+
+select '{ "k1": -9223372036854774.000, "k2": 9223372036854774.000 }'::mxkv_float8(3);
+                         mxkv_float8                         
+-------------------------------------------------------------
+ {"k1": -9.223372036854774e+15, "k2": 9.223372036854774e+15}
+(1 row)
+
+select '{ "k1": -922337203685477.4000, "k2": 922337203685477.4000 }'::mxkv_float8(4);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -922337203685477.4, "k2": 922337203685477.4}
+(1 row)
+
+select '{ "k1": -92233720368547.74000, "k2": 92233720368547.74000 }'::mxkv_float8(5);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -92233720368547.73, "k2": 92233720368547.73}
+(1 row)
+
+select '{ "k1": -9223372036854.774000, "k2": 9223372036854.774000 }'::mxkv_float8(6);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -9223372036854.773, "k2": 9223372036854.773}
+(1 row)
+
+select '{ "k1": -922337203685.4774000, "k2": 922337203685.4774000 }'::mxkv_float8(7);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -922337203685.4774, "k2": 922337203685.4774}
+(1 row)
+
+select '{ "k1": -92233720368.54774000, "k2": 92233720368.54774000 }'::mxkv_float8(8);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -92233720368.54774, "k2": 92233720368.54774}
+(1 row)
+
+select '{ "k1": -9223372036.854774000, "k2": 9223372036.854774000 }'::mxkv_float8(9);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -9223372036.854774, "k2": 9223372036.854774}
+(1 row)
+
+select '{ "k1": -922337203.6854774000, "k2": 922337203.6854774000 }'::mxkv_float8(10);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -922337203.6854774, "k2": 922337203.6854774}
+(1 row)
+
+select '{ "k1": -92233720.36854774000, "k2": 92233720.36854774000 }'::mxkv_float8(11);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -92233720.36854774, "k2": 92233720.36854774}
+(1 row)
+
+select '{ "k1": -9223372.036854774000, "k2": 9223372.036854774000 }'::mxkv_float8(12);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -9223372.036854774, "k2": 9223372.036854774}
+(1 row)
+
+select '{ "k1": -922337.2036854774000, "k2": 922337.2036854774000 }'::mxkv_float8(13);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -922337.2036854774, "k2": 922337.2036854774}
+(1 row)
+
+select '{ "k1": -92233.72036854774000, "k2": 92233.72036854774000 }'::mxkv_float8(14);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -92233.72036854774, "k2": 92233.72036854774}
+(1 row)
+
+select '{ "k1": -9223.372036854774000, "k2": 9223.372036854774000 }'::mxkv_float8(15);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -9223.372036854775, "k2": 9223.372036854775}
+(1 row)
+
+select '{ "k1": -922.3372036854774000, "k2": 922.3372036854774000 }'::mxkv_float8(16);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -922.3372036854774, "k2": 922.3372036854774}
+(1 row)
+
+select '{ "k1": -92.23372036854774000, "k2": 92.23372036854774000 }'::mxkv_float8(17);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -92.23372036854774, "k2": 92.23372036854774}
+(1 row)
+
+select '{ "k1": -9.223372036854774000, "k2": 9.223372036854774000 }'::mxkv_float8(18);
+                     mxkv_float8                     
+-----------------------------------------------------
+ {"k1": -9.223372036854775, "k2": 9.223372036854775}
+(1 row)
+
+select '{ "k1": -0.9223372036854774000, "k2": 0.9223372036854774000 }'::mxkv_float8(19);
+                      mxkv_float8                      
+-------------------------------------------------------
+ {"k1": -0.9223372036854774, "k2": 0.9223372036854774}
+(1 row)
+
+-- allow storing integers with scale 0
+select '{ "k101": 12 }'::mxkv_float8(0);
+ mxkv_float8  
+--------------
+ {"k101": 12}
+(1 row)
+
+-- trim ending zeros
+select '{ "k101": 12.00 }'::mxkv_float8(0);
+ mxkv_float8  
+--------------
+ {"k101": 12}
+(1 row)
+
+select '{ "k101": 12.300 }'::mxkv_float8(1);
+  mxkv_float8   
+----------------
+ {"k101": 12.3}
+(1 row)
+
+-- a value can be stored with higher scales
+select '{ "k101": 12.034 }'::mxkv_float8(3);
+   mxkv_float8    
+------------------
+ {"k101": 12.034}
+(1 row)
+
+select '{ "k101": 12.034 }'::mxkv_float8(4);
+   mxkv_float8    
+------------------
+ {"k101": 12.034}
+(1 row)
+
+select '{ "k101": 12.034 }'::mxkv_float8(5);
+   mxkv_float8    
+------------------
+ {"k101": 12.034}
+(1 row)
+
+select :full_records_i4::mxkv_float8(0)->'k100';
+ ?column? 
+----------
+      100
+(1 row)
+
+select :half_records_i4::mxkv_float8(0)->'k100';
+ ?column? 
+----------
+     -100
+(1 row)
+
+select :full_records_f4::mxkv_float8(2)->'k100';
+ ?column? 
+----------
+        1
+(1 row)
+
+select :half_records_f4::mxkv_float8(2)->'k100';
+ ?column? 
+----------
+       -1
+(1 row)
+
+--
+-- some json like operators are supported, and are more effective
+--
+select :full_records_i4::mxkv_int4->'k100';
+ ?column? 
+----------
+      100
+(1 row)
+
+select :full_records_i4::mxkv_int4->>'k100';
+ ?column? 
+----------
+      100
+(1 row)
+
+-- "->" looks up by key, but unlike json, we return text for mxkv_text
+with t1 as (select :full_records_i4::mxkv_text as kv)
+  select kv->'k100' as k100, pg_typeof(kv->'k100') as type from t1;
+ k100 | type 
+------+------
+ 100  | text
+(1 row)
+
+-- or int4 for mxkv_int4
+with t1 as (select :full_records_i4::mxkv_int4 as kv)
+  select kv->'k100' as k100, pg_typeof(kv->'k100') as type from t1;
+ k100 |  type   
+------+---------
+  100 | integer
+(1 row)
+
+-- or float4 for mxkv_float4
+with t1 as (select :full_records_f4::mxkv_float4 as kv)
+  select kv->'k100' as k100, pg_typeof(kv->'k100') as type from t1;
+ k100 | type 
+------+------
+    1 | real
+(1 row)
+
+-- or float8 for mxkv_float8
+with t1 as (select :full_records_f8::mxkv_float8 as kv)
+  select kv->'k100' as k100, pg_typeof(kv->'k100') as type from t1;
+ k100 |       type       
+------+------------------
+    1 | double precision
+(1 row)
+
+-- "->>" looks up by key, but unlike json, we return text for mxkv_text
+with t1 as (select :full_records_i4::mxkv_text as kv)
+  select kv->>'k100' as k100, pg_typeof(kv->>'k100') as type from t1;
+ k100 | type 
+------+------
+ 100  | text
+(1 row)
+
+-- or int4 for mxkv_int4
+with t1 as (select :full_records_i4::mxkv_int4 as kv)
+  select kv->>'k100' as k100, pg_typeof(kv->>'k100') as type from t1;
+ k100 |  type   
+------+---------
+  100 | integer
+(1 row)
+
+-- or float4 for mxkv_float4
+with t1 as (select :full_records_f4::mxkv_float4 as kv)
+  select kv->>'k100' as k100, pg_typeof(kv->>'k100') as type from t1;
+ k100 | type 
+------+------
+    1 | real
+(1 row)
+
+-- or float8 for mxkv_float8
+with t1 as (select :full_records_f8::mxkv_float8 as kv)
+  select kv->>'k100' as k100, pg_typeof(kv->>'k100') as type from t1;
+ k100 |       type       
+------+------------------
+    1 | double precision
+(1 row)
+
+-- "?" tests the existence of the key, only jsons supports it
+with t1 as (select :half_records_i4::mxkv_text as kv)
+  select kv->'k100' from t1 where kv ? 'k300';
+ ?column? 
+----------
+ -100
+(1 row)
+
+with t1 as (select :half_records_i4::mxkv_int4 as kv)
+  select kv->'k100' from t1 where kv ? 'k300';
+ ?column? 
+----------
+     -100
+(1 row)
+
+with t1 as (select :half_records_f4::mxkv_float4 as kv)
+  select kv->'k100' from t1 where kv ? 'k300';
+ ?column? 
+----------
+       -1
+(1 row)
+
+with t1 as (select :half_records_f8::mxkv_float8 as kv)
+  select kv->'k100' from t1 where kv ? 'k300';
+ ?column? 
+----------
+       -1
+(1 row)
+
+-- 'k301' does not exists in :half_records_{i4,f8}
+with t1 as (select :half_records_i4::mxkv_text as kv)
+  select kv->'k100' from t1 where kv ? 'k301';
+ ?column? 
+----------
+(0 rows)
+
+with t1 as (select :half_records_i4::mxkv_int4 as kv)
+  select kv->'k100' from t1 where kv ? 'k301';
+ ?column? 
+----------
+(0 rows)
+
+with t1 as (select :half_records_f4::mxkv_float4 as kv)
+  select kv->'k100' from t1 where kv ? 'k301';
+ ?column? 
+----------
+(0 rows)
+
+with t1 as (select :half_records_f8::mxkv_float8 as kv)
+  select kv->'k100' from t1 where kv ? 'k301';
+ ?column? 
+----------
+(0 rows)
+
+-- this behaves similar with "?", but not fully the same
+with t1 as (select :half_records_i4::mxkv_text as kv)
+  select kv->'k100' from t1 where kv->'k300' is not null;
+ ?column? 
+----------
+ -100
+(1 row)
+
+with t1 as (select :half_records_i4::mxkv_int4 as kv)
+  select kv->'k100' from t1 where kv->'k300' is not null;
+ ?column? 
+----------
+     -100
+(1 row)
+
+with t1 as (select :half_records_f4::mxkv_float4 as kv)
+  select kv->'k100' from t1 where kv->'k300' is not null;
+ ?column? 
+----------
+       -1
+(1 row)
+
+with t1 as (select :half_records_f8::mxkv_float8 as kv)
+  select kv->'k100' from t1 where kv->'k300' is not null;
+ ?column? 
+----------
+       -1
+(1 row)
+
+-- 'k301' does not exists in :half_records_{i4,f8}
+with t1 as (select :half_records_i4::mxkv_text as kv)
+  select kv->'k100' from t1 where kv->'k301' is not null;
+ ?column? 
+----------
+(0 rows)
+
+with t1 as (select :half_records_i4::mxkv_int4 as kv)
+  select kv->'k100' from t1 where kv->'k301' is not null;
+ ?column? 
+----------
+(0 rows)
+
+with t1 as (select :half_records_f4::mxkv_float4 as kv)
+  select kv->'k100' from t1 where kv->'k301' is not null;
+ ?column? 
+----------
+(0 rows)
+
+with t1 as (select :half_records_f8::mxkv_float8 as kv)
+  select kv->'k100' from t1 where kv->'k301' is not null;
+ ?column? 
+----------
+(0 rows)
+
+-- filter by value is also possible, but note the type
+with t1 as (select :full_records_i4::mxkv_text as kv)
+  select kv->'k100' from t1 where kv->'k300' = '300';
+ ?column? 
+----------
+ 100
+(1 row)
+
+with t1 as (select :full_records_i4::mxkv_text as kv)
+  select kv->'k100' from t1 where (kv->'k300')::int = 300;
+ ?column? 
+----------
+ 100
+(1 row)
+
+-- filter by value is easier with typed mxkv variants
+with t1 as (select :full_records_i4::mxkv_int4 as kv)
+  select kv->'k100' from t1 where kv->'k300' = 300;
+ ?column? 
+----------
+      100
+(1 row)
+
+with t1 as (select :full_records_f4::mxkv_float4 as kv)
+  select kv->'k100' from t1 where kv->'k300' = 3.00;
+ ?column? 
+----------
+        1
+(1 row)
+
+with t1 as (select :full_records_f8::mxkv_float8 as kv)
+  select kv->'k100' from t1 where kv->'k300' = 3.00;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- you can do anything on the values
+with t1 as (select :full_records_i4::mxkv_int4 as kv)
+  select min(kv->'k100'), max(kv->'k200'), sum(kv->'k300') from t1;
+ min | max | sum 
+-----+-----+-----
+ 100 | 200 | 300
+(1 row)
+
+with t1 as (select :full_records_f4::mxkv_float4 as kv)
+  select min(kv->'k100'), max(kv->'k200'), sum(kv->'k300') from t1;
+ min | max | sum 
+-----+-----+-----
+   1 |   2 |   3
+(1 row)
+
+with t1 as (select :full_records_f8::mxkv_float8 as kv)
+  select min(kv->'k100'), max(kv->'k200'), sum(kv->'k300') from t1;
+ min | max | sum 
+-----+-----+-----
+   1 |   2 |   3
+(1 row)
+
+-- the operators allow non-registered keys
+select '{ "k1": 1 }'::mxkv_int4->'no such key';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_int4->>'no such key';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_int4 ? 'no such key';
+ ?column? 
+----------
+ f
+(1 row)
+
+-- the operators work on empty mxkv
+select '{}'::mxkv_text->'k1';
+ ?column? 
+----------
+ 
+(1 row)
+
+select '{}'::mxkv_int4->'k1';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{}'::mxkv_float4->'k1';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{}'::mxkv_float8->'k1';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{}'::mxkv_text->>'k1';
+ ?column? 
+----------
+ 
+(1 row)
+
+select '{}'::mxkv_int4->>'k1';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{}'::mxkv_float4->>'k1';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{}'::mxkv_float8->>'k1';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{}'::mxkv_text ? 'k1';
+ ?column? 
+----------
+ f
+(1 row)
+
+select '{}'::mxkv_int4 ? 'k1';
+ ?column? 
+----------
+ f
+(1 row)
+
+select '{}'::mxkv_float4 ? 'k1';
+ ?column? 
+----------
+ f
+(1 row)
+
+select '{}'::mxkv_float8 ? 'k1';
+ ?column? 
+----------
+ f
+(1 row)
+
+-- the operators also allow empty key
+select '{ "k1": 1 }'::mxkv_text->'';
+ ?column? 
+----------
+ 
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_int4->'';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_float4->'';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_float8->'';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_text->>'';
+ ?column? 
+----------
+ 
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_int4->>'';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_float4->>'';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_float8->>'';
+ ?column? 
+----------
+         
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_text ? '';
+ ?column? 
+----------
+ f
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_int4 ? '';
+ ?column? 
+----------
+ f
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_float4 ? '';
+ ?column? 
+----------
+ f
+(1 row)
+
+select '{ "k1": 1 }'::mxkv_float8 ? '';
+ ?column? 
+----------
+ f
+(1 row)
+
+--
+-- type casting
+--
+select :full_records_i4::text::mxkv_text->'k9000';
+ ?column? 
+----------
+ 9000
+(1 row)
+
+select :full_records_i4::text::mxkv_int4->'k9000';
+ ?column? 
+----------
+     9000
+(1 row)
+
+select :full_records_i4::text::mxkv_float4->'k9000';
+ ?column? 
+----------
+     9000
+(1 row)
+
+select :full_records_i4::text::mxkv_float8->'k9000';
+ ?column? 
+----------
+     9000
+(1 row)
+
+select :full_records_i4::json::mxkv_text->'k9000';
+ ?column? 
+----------
+ 9000
+(1 row)
+
+select :full_records_i4::json::mxkv_int4->'k9000';
+ ?column? 
+----------
+     9000
+(1 row)
+
+select :full_records_i4::json::mxkv_float4->'k9000';
+ ?column? 
+----------
+     9000
+(1 row)
+
+select :full_records_i4::json::mxkv_float8->'k9000';
+ ?column? 
+----------
+     9000
+(1 row)
+
+select :full_records_i4::jsonb::mxkv_text->'k9000';
+ ?column? 
+----------
+ 9000
+(1 row)
+
+select :full_records_i4::jsonb::mxkv_int4->'k9000';
+ ?column? 
+----------
+     9000
+(1 row)
+
+select :full_records_i4::jsonb::mxkv_float4->'k9000';
+ ?column? 
+----------
+     9000
+(1 row)
+
+select :full_records_i4::jsonb::mxkv_float8->'k9000';
+ ?column? 
+----------
+     9000
+(1 row)
+
+--
+-- special characters handling
+--
+-- the hint for unregistered keys should be quoted
+select '{ "a\"b''c{}() .,:d\\e\u0001f\r\n\tg": 1 }'::mxkv_int4;
+ERROR:  unknown key "a\"b'c{}() .,:d\\e\u0001f\r\n\tg"
+LINE 1: select '{ "a\"b''c{}() .,:d\\e\u0001f\r\n\tg": 1 }'::mxkv_in...
+               ^
+DETAIL:  The key is not imported yet
+HINT:  Import the keys with the mxkv_import_keys() function
+select '{ "a\"b''c{}() .,:d\\e\u0002f\r\n\tg": 1 }'::mxkv_int4;
+ERROR:  unknown key "a\"b'c{}() .,:d\\e\u0002f\r\n\tg"
+LINE 1: select '{ "a\"b''c{}() .,:d\\e\u0002f\r\n\tg": 1 }'::mxkv_in...
+               ^
+DETAIL:  The key is not imported yet
+HINT:  Import the keys with the mxkv_import_keys() function
+-- import keys with special characters
+select mxkv_import_keys('{ "a\"b''c{}() .,:d\\e\u0001f\r\n\tg": 1 }'::json, false);
+    mxkv_import_keys     
+-------------------------
+ a"b'c{}() .,:d\e\x01f\r+
+         g
+(1 row)
+
+-- alter type should also work
+alter type mxkv_keys add value E'a\"b''c{}() .,:d\\e\x02f\r\n\tg';
+-- double check the keys are successfully imported
+select '{ "a\"b''c{}() .,:d\\e\u0001f\r\n\tg": 1 }'::mxkv_int4;
+                mxkv_int4                
+-----------------------------------------
+ {"a\"b'c{}() .,:d\\e\u0001f\r\n\tg": 1}
+(1 row)
+
+select '{ "a\"b''c{}() .,:d\\e\u0002f\r\n\tg": 1 }'::mxkv_int4;
+                mxkv_int4                
+-----------------------------------------
+ {"a\"b'c{}() .,:d\\e\u0002f\r\n\tg": 1}
+(1 row)
+
+-- convert keys with special characters to mxkv and back to text
+select '{ "a\"b''c{}() .,:d\\e\u0001f\r\n\tg": 1 }'::mxkv_int4;
+                mxkv_int4                
+-----------------------------------------
+ {"a\"b'c{}() .,:d\\e\u0001f\r\n\tg": 1}
+(1 row)
+
+-- and again
+select '{ "a\"b''c{}() .,:d\\e\u0001f\r\n\tg": 1 }'::mxkv_int4::text::mxkv_int4;
+                mxkv_int4                
+-----------------------------------------
+ {"a\"b'c{}() .,:d\\e\u0001f\r\n\tg": 1}
+(1 row)
+
+-- lookup with keys with special characters
+select '{ "a\"b''c{}() .,:d\\e\u0001f\r\n\tg": 1 }'::mxkv_int4 ? E'a\"b''c{}() .,:d\\e\x01f\r\n\tg';
+ ?column? 
+----------
+ t
+(1 row)
+
+select '{ "a\"b''c{}() .,:d\\e\u0001f\r\n\tg": 1 }'::mxkv_int4->>E'a\"b''c{}() .,:d\\e\x01f\r\n\tg';
+ ?column? 
+----------
+        1
+(1 row)
+
+-- values with special characters
+select '{ "k1": "a\"b''c{}() .,:d\\e\u0001f\r\n\tg" }'::mxkv_text;
+                 mxkv_text                  
+--------------------------------------------
+ {"k1": "a\"b'c{}() .,:d\\e\u0001f\r\n\tg"}
+(1 row)
+
+-- the looked up value should be quoted as text
+select '{ "k1": "a\"b''c{}() .,:d\\e\u0001f\r\n\tg" }'::mxkv_text->>'k1';
+        ?column?         
+-------------------------
+ a"b'c{}() .,:d\e\x01f\r+
+         g
+(1 row)
+
+-- -> behaves the same with ->>, this is different with json/jsonb
+select '{ "k1": "a\"b''c{}() .,:d\\e\u0001f\r\n\tg" }'::mxkv_text->'k1';
+        ?column?         
+-------------------------
+ a"b'c{}() .,:d\e\x01f\r+
+         g
+(1 row)
+
+-- vi: et :

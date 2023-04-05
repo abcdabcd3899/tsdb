@@ -1,0 +1,1 @@
+src/backend/cdb/motion/cdbmotion.o src/backend/cdb/motion/tupchunklist.o src/backend/cdb/motion/tupser.o src/backend/cdb/motion/ic_common.o src/backend/cdb/motion/ic_tcp.o src/backend/cdb/motion/ic_udpifc.o src/backend/cdb/motion/htupfifo.o src/backend/cdb/motion/tupleremap.o

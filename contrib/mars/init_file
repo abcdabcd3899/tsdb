@@ -1,0 +1,12 @@
+-- start_matchsubs
+m/Motion \d+:\d+/
+s/Motion \d+:\d+/Motion M:N/
+
+m/segments: \d+/
+s/segments: \d+/segments: M/
+
+# ignore lineno in elog() messages, for example:
+# ERROR:  mars: cannot add column to mars table (tablecmds.c:6974)
+m/^ERROR:.*:\d+\)$/
+s/:\d+\)$/:LINENO/
+-- end_matchsubs

@@ -1,0 +1,46 @@
+\c matrixmgr
+SELECT proargnames, prosrc FROM pg_proc WHERE  proname = 'mxmgr_gate_deploy';
+        proargnames        |                                    prosrc                                     
+---------------------------+-------------------------------------------------------------------------------
+ {schema_name,is_validate} |                                                                              +
+                           | DECLARE                                                                      +
+                           |     tmp RECORD;                                                              +
+                           |     args text;                                                               +
+                           |     db_path text;                                                            +
+                           | BEGIN                                                                        +
+                           |     EXECUTE format('SET search_path TO %I', schema_name);                    +
+                           |     args := 'gate deploy ';                                                  +
+                           |     FOR tmp IN SELECT key, CASE WHEN value = '' THEN '""' ELSE value END     +
+                           |         FROM matrix_manager_config WHERE category IN ('gate', 'metrics') LOOP+
+                           |             args := CONCAT(args, ' --', tmp.key, ' ', tmp.value);            +
+                           |         END LOOP;                                                            +
+                           |     IF is_validate=true THEN                                                 +
+                           |         args := CONCAT(args, ' --validate');                                 +
+                           |     END IF;                                                                  +
+                           |     PERFORM matrixmgr_internal.mxmgr_cmd_run('mxctl', args, 'gate');         +
+                           |                                                                              +
+                           |     RESET search_path;                                                       +
+                           |     RETURN true;                                                             +
+                           | END;                                                                         +
+                           | 
+(1 row)
+
+SELECT proargnames, prosrc FROM pg_proc WHERE  proname = 'mxmgr_remove_gate';
+  proargnames  |                                                                    prosrc                                                                    
+---------------+----------------------------------------------------------------------------------------------------------------------------------------------
+ {schema_name} |                                                                                                                                             +
+               | DECLARE                                                                                                                                     +
+               |     tmp RECORD;                                                                                                                             +
+               |     args text;                                                                                                                              +
+               | BEGIN                                                                                                                                       +
+               |     EXECUTE format('SET search_path TO %I', schema_name);                                                                                   +
+               |     FOR tmp IN SELECT key, CASE WHEN value = '' THEN '""' ELSE value END FROM matrix_manager_config WHERE category IN ('db', 'metrics') LOOP+
+               |         args := CONCAT(args, ' --', tmp.key, ' ', tmp.value);                                                                               +
+               |     END LOOP;                                                                                                                               +
+               |     EXECUTE format('COPY (SELECT 1) TO PROGRAM ''mxctl gate remove %s'';', args);                                                           +
+               |     RESET search_path;                                                                                                                      +
+               |     RETURN true;                                                                                                                            +
+               | END;                                                                                                                                        +
+               | 
+(1 row)
+

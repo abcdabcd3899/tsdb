@@ -1,0 +1,182 @@
+-- start_ignore
+CREATE OR REPLACE language plpython3u;
+CREATE EXTENSION IF NOT EXISTS mars;
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+--
+-- pg_ctl:
+--   datadir: data directory of process to target with `pg_ctl`
+--   command: commands valid for `pg_ctl`
+--   command_mode: modes valid for `pg_ctl -m`  
+--
+CREATE OR REPLACE function pg_ctl(datadir text, command text, command_mode text default 'immediate')
+returns text as $$
+    class PgCtlError(Exception):
+        def __init__(self, errmsg):
+            self.errmsg = errmsg
+        def __str__(self):
+            return repr(self.errmsg)
+
+    import subprocess
+    if command == 'promote':
+        cmd = 'pg_ctl promote -D %s' % datadir
+    elif command in ('stop', 'restart'):
+        cmd = 'pg_ctl -l postmaster.log -D %s ' % datadir
+        cmd = cmd + '-w -t 600 -m %s %s' % (command_mode, command)
+    else:
+        return 'Invalid command input'
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            shell=True)
+    stdout, stderr = proc.communicate()
+
+    if proc.returncode == 0:
+        return 'OK'
+    else:
+        raise PgCtlError(stdout.decode()+'|'+stderr.decode())
+$$ language plpython3u;
+DROP TABLE IF EXISTS foo;
+-- end_ignore
+CREATE TABLE foo(a int, b bigint, c float) using mars DISTRIBUTED BY(a);
+INSERT INTO foo SELECT i, i * 10 , i * 0.1 FROM generate_series(1, 10) i;
+SELECT pg_ctl((SELECT datadir FROM gp_segment_configuration c WHERE c.role='p' AND c.content=0), 'stop', 'immediate');
+ pg_ctl 
+--------
+ OK
+(1 row)
+
+-- trigger failover
+SELECT gp_request_fts_probe_scan();
+ gp_request_fts_probe_scan 
+---------------------------
+ t
+(1 row)
+
+SELECT * FROM foo;
+ a  |  b  |  c  
+----+-----+-----
+  1 |  10 | 0.1
+  2 |  20 | 0.2
+  3 |  30 | 0.3
+  4 |  40 | 0.4
+  5 |  50 | 0.5
+  6 |  60 | 0.6
+  7 |  70 | 0.7
+  8 |  80 | 0.8
+  9 |  90 | 0.9
+ 10 | 100 |   1
+(10 rows)
+
+INSERT INTO foo SELECT i, i * 10 , i * 0.1 FROM generate_series(1, 10) i;
+SELECT * FROM foo;
+ a  |  b  |  c  
+----+-----+-----
+  1 |  10 | 0.1
+  2 |  20 | 0.2
+  3 |  30 | 0.3
+  4 |  40 | 0.4
+  5 |  50 | 0.5
+  6 |  60 | 0.6
+  7 |  70 | 0.7
+  8 |  80 | 0.8
+  9 |  90 | 0.9
+ 10 | 100 |   1
+  1 |  10 | 0.1
+  2 |  20 | 0.2
+  3 |  30 | 0.3
+  4 |  40 | 0.4
+  5 |  50 | 0.5
+  6 |  60 | 0.6
+  7 |  70 | 0.7
+  8 |  80 | 0.8
+  9 |  90 | 0.9
+ 10 | 100 |   1
+(20 rows)
+
+-- start_ignore
+\! gprecoverseg -aF --no-progress
+\! gprecoverseg -arv --no-progress
+-- end_ignore
+SELECT * FROM foo;
+ a  |  b  |  c  
+----+-----+-----
+  1 |  10 | 0.1
+  2 |  20 | 0.2
+  3 |  30 | 0.3
+  4 |  40 | 0.4
+  5 |  50 | 0.5
+  6 |  60 | 0.6
+  7 |  70 | 0.7
+  8 |  80 | 0.8
+  9 |  90 | 0.9
+ 10 | 100 |   1
+  1 |  10 | 0.1
+  2 |  20 | 0.2
+  3 |  30 | 0.3
+  4 |  40 | 0.4
+  5 |  50 | 0.5
+  6 |  60 | 0.6
+  7 |  70 | 0.7
+  8 |  80 | 0.8
+  9 |  90 | 0.9
+ 10 | 100 |   1
+(20 rows)
+
+SELECT pg_ctl((SELECT datadir FROM gp_segment_configuration c WHERE c.role='p' AND c.content=0), 'stop', 'immediate');
+ pg_ctl 
+--------
+ OK
+(1 row)
+
+-- trigger failover
+SELECT gp_request_fts_probe_scan();
+ gp_request_fts_probe_scan 
+---------------------------
+ t
+(1 row)
+
+SELECT * FROM foo;
+ a  |  b  |  c  
+----+-----+-----
+  1 |  10 | 0.1
+  2 |  20 | 0.2
+  3 |  30 | 0.3
+  4 |  40 | 0.4
+  5 |  50 | 0.5
+  6 |  60 | 0.6
+  7 |  70 | 0.7
+  8 |  80 | 0.8
+  9 |  90 | 0.9
+ 10 | 100 |   1
+  1 |  10 | 0.1
+  2 |  20 | 0.2
+  3 |  30 | 0.3
+  4 |  40 | 0.4
+  5 |  50 | 0.5
+  6 |  60 | 0.6
+  7 |  70 | 0.7
+  8 |  80 | 0.8
+  9 |  90 | 0.9
+ 10 | 100 |   1
+(20 rows)
+
+TRUNCATE foo;
+SELECT * FROM foo;
+ a | b | c 
+---+---+---
+(0 rows)
+
+-- start_ignore
+\! gprecoverseg -aF --no-progress
+\! gprecoverseg -arv --no-progress
+-- end_ignore
+SELECT * FROM foo;
+ a | b | c 
+---+---+---
+(0 rows)
+
+DROP TABLE foo;

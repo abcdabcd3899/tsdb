@@ -1,0 +1,130 @@
+--
+-- verify the grouping
+--
+
+select ctid, c1, c2 from :tname;
+
+--
+-- verify the fast seeking with only the first key
+--
+
+select c1, c2 from :tname where c1 <  1 order by c1, c2;
+select c1, c2 from :tname where c1 <= 1 order by c1, c2;
+select c1, c2 from :tname where c1 =  1 order by c1, c2;
+select c1, c2 from :tname where c1 >= 1 order by c1, c2;
+select c1, c2 from :tname where c1 >  1 order by c1, c2;
+
+--
+-- verify the fast seeking with only the second key
+--
+
+select c1, c2 from :tname where c2 <  1 order by c1, c2;
+select c1, c2 from :tname where c2 <= 1 order by c1, c2;
+select c1, c2 from :tname where c2 =  1 order by c1, c2;
+select c1, c2 from :tname where c2 >= 1 order by c1, c2;
+select c1, c2 from :tname where c2 >  1 order by c1, c2;
+
+--
+-- verify the fast seeking with both keys
+--
+
+select c1, c2 from :tname where c1 <  1 and c2 <  2 order by c1, c2;
+select c1, c2 from :tname where c1 <  1 and c2 <= 2 order by c1, c2;
+select c1, c2 from :tname where c1 <  1 and c2 =  2 order by c1, c2;
+select c1, c2 from :tname where c1 <  1 and c2 >= 2 order by c1, c2;
+select c1, c2 from :tname where c1 <  1 and c2 >  2 order by c1, c2;
+
+select c1, c2 from :tname where c1 <= 1 and c2 <  2 order by c1, c2;
+select c1, c2 from :tname where c1 <= 1 and c2 <= 2 order by c1, c2;
+select c1, c2 from :tname where c1 <= 1 and c2 =  2 order by c1, c2;
+select c1, c2 from :tname where c1 <= 1 and c2 >= 2 order by c1, c2;
+select c1, c2 from :tname where c1 <= 1 and c2 >  2 order by c1, c2;
+
+select c1, c2 from :tname where c1 =  1 and c2 <  2 order by c1, c2;
+select c1, c2 from :tname where c1 =  1 and c2 <= 2 order by c1, c2;
+select c1, c2 from :tname where c1 =  1 and c2 =  2 order by c1, c2;
+select c1, c2 from :tname where c1 =  1 and c2 >= 2 order by c1, c2;
+select c1, c2 from :tname where c1 =  1 and c2 >  2 order by c1, c2;
+
+select c1, c2 from :tname where c1 >= 1 and c2 <  2 order by c1, c2;
+select c1, c2 from :tname where c1 >= 1 and c2 <= 2 order by c1, c2;
+select c1, c2 from :tname where c1 >= 1 and c2 =  2 order by c1, c2;
+select c1, c2 from :tname where c1 >= 1 and c2 >= 2 order by c1, c2;
+select c1, c2 from :tname where c1 >= 1 and c2 >  2 order by c1, c2;
+
+select c1, c2 from :tname where c1 >  1 and c2 <  2 order by c1, c2;
+select c1, c2 from :tname where c1 >  1 and c2 <= 2 order by c1, c2;
+select c1, c2 from :tname where c1 >  1 and c2 =  2 order by c1, c2;
+select c1, c2 from :tname where c1 >  1 and c2 >= 2 order by c1, c2;
+select c1, c2 from :tname where c1 >  1 and c2 >  2 order by c1, c2;
+
+--
+-- verify the fast seeking with AND expr on the first key
+--
+
+select c1, c2 from :tname where c1 >= 1 and c1 <= 3 order by c1, c2;
+select c1, c2 from :tname where c1 >  1 and c1 <= 3 order by c1, c2;
+select c1, c2 from :tname where c1 >= 1 and c1 <  3 order by c1, c2;
+select c1, c2 from :tname where c1 >  1 and c1 <  3 order by c1, c2;
+
+--
+-- verify the fast seeking with AND expr on the second key
+--
+
+select c1, c2 from :tname where c2 >= 1 and c2 <= 3 order by c1, c2;
+select c1, c2 from :tname where c2 >  1 and c2 <= 3 order by c1, c2;
+select c1, c2 from :tname where c2 >= 1 and c2 <  3 order by c1, c2;
+select c1, c2 from :tname where c2 >  1 and c2 <  3 order by c1, c2;
+
+--
+-- verify the fast seeking with AND expr on both keys
+--
+
+select c1, c2 from :tname where c1 >= 1 and c1 <= 3 and c2 >= 1 and c2 <= 3 order by c1, c2;
+select c1, c2 from :tname where c1 >  1 and c1 <= 3 and c2 >  1 and c2 <= 3 order by c1, c2;
+select c1, c2 from :tname where c1 >= 1 and c1 <  3 and c2 >= 1 and c2 <  3 order by c1, c2;
+select c1, c2 from :tname where c1 >  1 and c1 <  3 and c2 >  1 and c2 <  3 order by c1, c2;
+
+select c1, c2 from :tname where c1 =  1 and c2 >= 1 and c2 <= 3 order by c1, c2;
+select c1, c2 from :tname where c1 =  1 and c2 >  1 and c2 <= 3 order by c1, c2;
+select c1, c2 from :tname where c1 =  1 and c2 >= 1 and c2 <  3 order by c1, c2;
+select c1, c2 from :tname where c1 =  1 and c2 >  1 and c2 <  3 order by c1, c2;
+
+select c1, c2 from :tname where c1 >= 1 and c1 <= 3 and c2 =  1 order by c1, c2;
+select c1, c2 from :tname where c1 >  1 and c1 <= 3 and c2 =  1 order by c1, c2;
+select c1, c2 from :tname where c1 >= 1 and c1 <  3 and c2 =  1 order by c1, c2;
+select c1, c2 from :tname where c1 >  1 and c1 <  3 and c2 =  1 order by c1, c2;
+
+--
+-- verify the IN expr
+--
+
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) and c1 <  1 order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) and c1 <= 1 order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) and c1 =  1 order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) and c1 >= 1 order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) and c1 >  1 order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) and c2 <  1 order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) and c2 <= 1 order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) and c2 =  1 order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) and c2 >= 1 order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) and c2 >  1 order by c1, c2;
+
+select c1, c2 from :tname where c2 in ( 0, 1, 3 ) order by c1, c2;
+select c1, c2 from :tname where c2 in ( 0, 1, 3 ) and c1 <  1 order by c1, c2;
+select c1, c2 from :tname where c2 in ( 0, 1, 3 ) and c1 <= 1 order by c1, c2;
+select c1, c2 from :tname where c2 in ( 0, 1, 3 ) and c1 =  1 order by c1, c2;
+select c1, c2 from :tname where c2 in ( 0, 1, 3 ) and c1 >= 1 order by c1, c2;
+select c1, c2 from :tname where c2 in ( 0, 1, 3 ) and c1 >  1 order by c1, c2;
+select c1, c2 from :tname where c2 in ( 0, 1, 3 ) and c2 <  1 order by c1, c2;
+select c1, c2 from :tname where c2 in ( 0, 1, 3 ) and c2 <= 1 order by c1, c2;
+select c1, c2 from :tname where c2 in ( 0, 1, 3 ) and c2 =  1 order by c1, c2;
+select c1, c2 from :tname where c2 in ( 0, 1, 3 ) and c2 >= 1 order by c1, c2;
+select c1, c2 from :tname where c2 in ( 0, 1, 3 ) and c2 >  1 order by c1, c2;
+
+select c1, c2 from :tname where c1 in ( 0, 1, 3 ) and c2 in ( 0, 1, 3 ) order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 2 ) and c1 in ( 1, 2, 3 ) order by c1, c2;
+select c1, c2 from :tname where c2 in ( 0, 1, 2 ) and c2 in ( 1, 2, 3 ) order by c1, c2;
+select c1, c2 from :tname where c1 in ( 0, 1, 2 ) and c1 in ( 1, 2, 3 )
+                       and c2 in ( 0, 1, 2 ) and c2 in ( 1, 2, 3 ) order by c1, c2;

@@ -1,0 +1,17 @@
+-- cleanup
+--
+-- start_ignore
+DROP DATABASE IF EXISTS matrixmgr;
+-- end_ignore
+CREATE DATABASE matrixmgr;
+\c matrixmgr
+--
+-- setup
+--
+-- should fail due to no matrixts
+CREATE EXTENSION matrixmgr;
+ERROR:  required extension "matrixts" is not installed
+HINT:  Use CREATE EXTENSION ... CASCADE to install required extensions too.
+-- should success
+CREATE EXTENSION matrixmgr CASCADE;
+NOTICE:  installing required extension "matrixts"

@@ -1,0 +1,21 @@
+\c matrixmgr
+SELECT matrixmgr_internal.mxmgr_cmd_run('/bin/ls', '', 'test');
+ERROR:  absolute path not allowed
+SELECT matrixmgr_internal.mxmgr_cmd_run('ls', '', 'test');
+NOTICE:  (test)
+ mxmgr_cmd_run 
+---------------
+ t
+(1 row)
+
+SELECT matrixmgr_internal.mxmgr_cmd_run('../../bin/ls', '', 'test');
+ERROR:  path must be in or below the current directory
+SELECT matrixmgr_internal.mxmgr_cmd_run('../bin/pg_test_timing', '--help', 'test');
+ERROR:  path must be in or below the current directory
+SELECT matrixmgr_internal.mxmgr_cmd_run('pg_test_timing', '--help', 'test');
+NOTICE:  (test)Usage: pg_test_timing [-d DURATION]
+ mxmgr_cmd_run 
+---------------
+ t
+(1 row)
+

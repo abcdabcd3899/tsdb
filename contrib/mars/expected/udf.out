@@ -1,0 +1,1571 @@
+--start ignore
+CREATE extension matrixts;
+ERROR:  extension "matrixts" already exists
+CREATE extension mars;
+ERROR:  extension "mars" already exists
+DROP TABLE IF EXISTS mars.temp_public_foo;
+NOTICE:  table "temp_public_foo" does not exist, skipping
+DROP TABLE IF EXISTS foo;
+--end ignore
+create table foo ( tag int ,tz timestamp(6) , measurement float ) distributed by (tag) partition by range(tz);
+select mars.build_timeseries_table('foo','tagkey="tag", timekey="tz", timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('foo', '2020-01-08', '2020-01-09','1 day');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Wed Jan 08 00:00:00 2020') TO ('Thu Jan 09 00:00:00 2020')")
+(1 row)
+
+insert into foo select i%5, '2020-01-08 08:00:00'::timestamp + concat(i/100, 'mins')::interval, i/100 from generate_series(1, 10000) i;
+select sum(measurement), count(measurement) from foo group by tag;
+  sum  | count 
+-------+-------
+ 99000 |  2000
+ 99000 |  2000
+ 99000 |  2000
+ 99000 |  2000
+ 99100 |  2000
+(5 rows)
+
+explain select sum(measurement), count(measurement) from foo group by tag;
+                                     QUERY PLAN                                     
+------------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=129.08..145.75 rows=1000 width=20)
+   ->  HashAggregate  (cost=129.08..132.42 rows=333 width=20)
+         Group Key: foo_1_prt_1.tag
+         ->  Seq Scan on foo_1_prt_1  (cost=0.00..88.33 rows=5433 width=12)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_prt_1 | heap
+(1 row)
+
+select mars.compress_partition(inhrelid::regclass) from pg_inherits where inhparent = 'foo'::regclass;
+ compress_partition 
+--------------------
+ foo_1_mars1
+(1 row)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars1 | mars
+(1 row)
+
+select sum(measurement), count(measurement) from foo group by tag;
+ sum  | count 
+------+-------
+ 4950 |   100
+ 4950 |   100
+ 4950 |   100
+ 4950 |   100
+ 5050 |   101
+(5 rows)
+
+explain select sum(measurement), count(measurement) from foo group by tag;
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=0.00..33.61 rows=1000 width=20)
+   ->  Finalize GroupAggregate  (cost=0.00..20.27 rows=333 width=20)
+         Group Key: foo_1_mars1.tag
+         ->  Custom Scan (MarsAggScan)  (cost=0.00..16.93 rows=1 width=20)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+create table foo ( tag int ,tz timestamp , measurement float ) distributed by (tag) partition by range(tz);
+select mars.build_timeseries_table('foo','tagkey="tag", timekey="tz", timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('foo', '2020-01-10', '1 day');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Fri Jan 10 00:00:00 2020') TO ('Sat Jan 11 00:00:00 2020')")
+(1 row)
+
+insert into foo select i%5, '2020-01-10 08:00:00'::timestamp + concat(i/100, 'mins')::interval, i/100 from generate_series(1, 10000) i;
+select sum(measurement), count(measurement) from foo group by tag;
+  sum  | count 
+-------+-------
+ 99000 |  2000
+ 99000 |  2000
+ 99000 |  2000
+ 99000 |  2000
+ 99100 |  2000
+(5 rows)
+
+explain select sum(measurement), count(measurement) from foo group by tag;
+                                     QUERY PLAN                                     
+------------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=129.08..145.75 rows=1000 width=20)
+   ->  HashAggregate  (cost=129.08..132.42 rows=333 width=20)
+         Group Key: foo_1_prt_1.tag
+         ->  Seq Scan on foo_1_prt_1  (cost=0.00..88.33 rows=5433 width=12)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_prt_1 | heap
+(1 row)
+
+select mars.compress_partition(inhrelid::regclass) from pg_inherits where inhparent = 'foo'::regclass;
+ compress_partition 
+--------------------
+ foo_1_mars1
+(1 row)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars1 | mars
+(1 row)
+
+select sum(measurement), count(measurement) from foo group by tag;
+ sum  | count 
+------+-------
+ 4950 |   100
+ 4950 |   100
+ 4950 |   100
+ 4950 |   100
+ 5050 |   101
+(5 rows)
+
+explain select sum(measurement), count(measurement) from foo group by tag;
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=0.00..33.61 rows=1000 width=20)
+   ->  Finalize GroupAggregate  (cost=0.00..20.27 rows=333 width=20)
+         Group Key: foo_1_mars1.tag
+         ->  Custom Scan (MarsAggScan)  (cost=0.00..16.93 rows=1 width=20)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+create table foo ( tag int ,tz timestamp , measurement float ) distributed by (tag) partition by range(tz);
+select mars.build_timeseries_table('foo','tagkey="tag", timekey="tz", timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('foo', '2020-01-01', '2020-01-02','8 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Wed Jan 01 08:00:00 2020')")
+ (foo_1_prt_2,"FOR VALUES FROM ('Wed Jan 01 08:00:00 2020') TO ('Wed Jan 01 16:00:00 2020')")
+ (foo_1_prt_3,"FOR VALUES FROM ('Wed Jan 01 16:00:00 2020') TO ('Thu Jan 02 00:00:00 2020')")
+(3 rows)
+
+insert into foo select i%5, '2020-01-01 08:00:00'::timestamp + concat(i/100, 'mins')::interval, i/100 from generate_series(1, 10000) i;
+select sum(measurement), count(measurement) from foo group by tag;
+  sum  | count 
+-------+-------
+ 99000 |  2000
+ 99100 |  2000
+ 99000 |  2000
+ 99000 |  2000
+ 99000 |  2000
+(5 rows)
+
+explain select sum(measurement), count(measurement) from foo group by tag;
+                                       QUERY PLAN                                       
+----------------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=454.75..471.42 rows=1000 width=20)
+   ->  Finalize HashAggregate  (cost=454.75..458.08 rows=333 width=20)
+         Group Key: foo_1_prt_1.tag
+         ->  Append  (cost=129.08..432.25 rows=3000 width=20)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: foo_1_prt_1.tag
+                     ->  Seq Scan on foo_1_prt_1  (cost=0.00..88.33 rows=5433 width=12)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: foo_1_prt_2.tag
+                     ->  Seq Scan on foo_1_prt_2  (cost=0.00..88.33 rows=5433 width=12)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: foo_1_prt_3.tag
+                     ->  Seq Scan on foo_1_prt_3  (cost=0.00..88.33 rows=5433 width=12)
+ Optimizer: Postgres query optimizer
+(14 rows)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_prt_1 | heap
+ foo_1_prt_2 | heap
+ foo_1_prt_3 | heap
+(3 rows)
+
+select mars.compress_partition(inhrelid::regclass) from pg_inherits where inhparent = 'foo'::regclass;
+ compress_partition 
+--------------------
+ foo_1_mars1
+ foo_1_mars2
+ foo_1_mars3
+(3 rows)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars1 | mars
+ foo_1_mars2 | mars
+ foo_1_mars3 | mars
+(3 rows)
+
+select sum(measurement), count(measurement) from foo group by tag;
+ sum  | count 
+------+-------
+ 4950 |   100
+ 4950 |   100
+ 4950 |   100
+ 4950 |   100
+ 5050 |   101
+(5 rows)
+
+explain select sum(measurement), count(measurement) from foo group by tag;
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=0.02..67.55 rows=1000 width=20)
+   ->  Finalize GroupAggregate  (cost=0.02..54.21 rows=333 width=20)
+         Group Key: foo_1_mars1.tag
+         ->  Merge Append  (cost=0.02..50.86 rows=3 width=20)
+               Sort Key: foo_1_mars1.tag
+               ->  Custom Scan (MarsAggScan)  (cost=0.00..16.93 rows=1 width=20)
+               ->  Custom Scan (MarsAggScan)  (cost=0.00..16.93 rows=1 width=20)
+               ->  Custom Scan (MarsAggScan)  (cost=0.00..16.93 rows=1 width=20)
+ Optimizer: Postgres query optimizer
+(9 rows)
+
+-- test compression type keep in mars relation
+select count(*) from (select unnest(attoptions) as opt from pg_attribute_encoding inner join pg_inherits on inhrelid = attrelid where inhparent = 'foo'::regclass) as foo where opt = 'compresstype=lz4';
+ count 
+-------
+     9
+(1 row)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+-- failed case
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ f
+(1 row)
+
+drop table foo;
+create table "FoO_" ( "tag@" int, "timestamp" timestamp, measurement float) distributed by ("tag@") partition by range("timestamp");
+select mars.build_timeseries_table('"FoO_"','tagkey="tag@", timekey="timestamp", timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('"FoO_"', '2020-01-01', '2020-01-02','8 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                            add_partition                                            
+-----------------------------------------------------------------------------------------------------
+ ("""FoO__1_prt_1""","FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Wed Jan 01 08:00:00 2020')")
+ ("""FoO__1_prt_2""","FOR VALUES FROM ('Wed Jan 01 08:00:00 2020') TO ('Wed Jan 01 16:00:00 2020')")
+ ("""FoO__1_prt_3""","FOR VALUES FROM ('Wed Jan 01 16:00:00 2020') TO ('Thu Jan 02 00:00:00 2020')")
+(3 rows)
+
+insert into "FoO_" select i%5, '2020-01-01 08:00:00'::timestamp + concat(i/100, 'mins')::interval, i/100 from generate_series(1, 10000) i;
+select sum(measurement), count(measurement) from "FoO_" group by "tag@";
+  sum  | count 
+-------+-------
+ 99000 |  2000
+ 99000 |  2000
+ 99000 |  2000
+ 99000 |  2000
+ 99100 |  2000
+(5 rows)
+
+explain select sum(measurement), count(measurement) from "FoO_" group by "tag@";
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=454.75..471.42 rows=1000 width=20)
+   ->  Finalize HashAggregate  (cost=454.75..458.08 rows=333 width=20)
+         Group Key: "FoO__1_prt_1"."tag@"
+         ->  Append  (cost=129.08..432.25 rows=3000 width=20)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: "FoO__1_prt_1"."tag@"
+                     ->  Seq Scan on "FoO__1_prt_1"  (cost=0.00..88.33 rows=5433 width=12)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: "FoO__1_prt_2"."tag@"
+                     ->  Seq Scan on "FoO__1_prt_2"  (cost=0.00..88.33 rows=5433 width=12)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: "FoO__1_prt_3"."tag@"
+                     ->  Seq Scan on "FoO__1_prt_3"  (cost=0.00..88.33 rows=5433 width=12)
+ Optimizer: Postgres query optimizer
+(14 rows)
+
+select * from mars.list_partition('"FoO_"');
+    relname     | storage 
+----------------+---------
+ "FoO__1_prt_1" | heap
+ "FoO__1_prt_2" | heap
+ "FoO__1_prt_3" | heap
+(3 rows)
+
+select mars.compress_partition(inhrelid::regclass) from  pg_inherits where inhparent = '"FoO_"'::regclass;
+ compress_partition 
+--------------------
+ "FoO__1_mars1"
+ "FoO__1_mars2"
+ "FoO__1_mars3"
+(3 rows)
+
+select * from mars.list_partition('"FoO_"');
+    relname     | storage 
+----------------+---------
+ "FoO__1_mars3" | mars
+ "FoO__1_mars1" | mars
+ "FoO__1_mars2" | mars
+(3 rows)
+
+select sum(measurement), count(measurement) from "FoO_" group by "tag@";
+ sum  | count 
+------+-------
+ 4950 |   100
+ 4950 |   100
+ 4950 |   100
+ 4950 |   100
+ 5050 |   101
+(5 rows)
+
+explain select sum(measurement), count(measurement) from "FoO_" group by "tag@";
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=0.02..67.55 rows=1000 width=20)
+   ->  Finalize GroupAggregate  (cost=0.02..54.21 rows=333 width=20)
+         Group Key: "FoO__1_mars1"."tag@"
+         ->  Merge Append  (cost=0.02..50.86 rows=3 width=20)
+               Sort Key: "FoO__1_mars1"."tag@"
+               ->  Custom Scan (MarsAggScan)  (cost=0.00..16.93 rows=1 width=20)
+               ->  Custom Scan (MarsAggScan)  (cost=0.00..16.93 rows=1 width=20)
+               ->  Custom Scan (MarsAggScan)  (cost=0.00..16.93 rows=1 width=20)
+ Optimizer: Postgres query optimizer
+(9 rows)
+
+select mars.destroy_timeseries_table('"FoO_"');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table "FoO_";
+create table """F'" ( "tag@" int, "timestamp" timestamp, measurement float) distributed by ("tag@") partition by range("timestamp");
+select mars.build_timeseries_table('"""F''"','tagkey="tag@", timekey="timestamp", timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('"""F''"', '2020-01-01', '2020-01-02','8 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                             add_partition                                             
+-------------------------------------------------------------------------------------------------------
+ ("""""""F'_1_prt_1""","FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Wed Jan 01 08:00:00 2020')")
+ ("""""""F'_1_prt_2""","FOR VALUES FROM ('Wed Jan 01 08:00:00 2020') TO ('Wed Jan 01 16:00:00 2020')")
+ ("""""""F'_1_prt_3""","FOR VALUES FROM ('Wed Jan 01 16:00:00 2020') TO ('Thu Jan 02 00:00:00 2020')")
+(3 rows)
+
+insert into """F'" select i%5, '2020-01-01 08:00:00'::timestamp + concat(i/100, 'mins')::interval, i/100 from generate_series(1, 10000) i;
+select sum(measurement), count(measurement) from """F'" group by "tag@";
+  sum  | count 
+-------+-------
+ 99000 |  2000
+ 99100 |  2000
+ 99000 |  2000
+ 99000 |  2000
+ 99000 |  2000
+(5 rows)
+
+explain select sum(measurement), count(measurement) from """F'" group by "tag@";
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=454.75..471.42 rows=1000 width=20)
+   ->  Finalize HashAggregate  (cost=454.75..458.08 rows=333 width=20)
+         Group Key: """F'_1_prt_1"."tag@"
+         ->  Append  (cost=129.08..432.25 rows=3000 width=20)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: """F'_1_prt_1"."tag@"
+                     ->  Seq Scan on """F'_1_prt_1"  (cost=0.00..88.33 rows=5433 width=12)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: """F'_1_prt_2"."tag@"
+                     ->  Seq Scan on """F'_1_prt_2"  (cost=0.00..88.33 rows=5433 width=12)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: """F'_1_prt_3"."tag@"
+                     ->  Seq Scan on """F'_1_prt_3"  (cost=0.00..88.33 rows=5433 width=12)
+ Optimizer: Postgres query optimizer
+(14 rows)
+
+select * from mars.list_partition('"""F''"');
+    relname     | storage 
+----------------+---------
+ """F'_1_prt_1" | heap
+ """F'_1_prt_2" | heap
+ """F'_1_prt_3" | heap
+(3 rows)
+
+select mars.compress_partition(inhrelid::regclass) from  pg_inherits where inhparent = '"""F''"'::regclass;
+ compress_partition 
+--------------------
+ """F'_1_mars1"
+ """F'_1_mars2"
+ """F'_1_mars3"
+(3 rows)
+
+select * from mars.list_partition('"""F''"');
+    relname     | storage 
+----------------+---------
+ """F'_1_mars1" | mars
+ """F'_1_mars2" | mars
+ """F'_1_mars3" | mars
+(3 rows)
+
+select sum(measurement), count(measurement) from """F'" group by "tag@";
+ sum  | count 
+------+-------
+ 4950 |   100
+ 4950 |   100
+ 4950 |   100
+ 4950 |   100
+ 5050 |   101
+(5 rows)
+
+explain select sum(measurement), count(measurement) from """F'" group by "tag@";
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=0.02..67.55 rows=1000 width=20)
+   ->  Finalize GroupAggregate  (cost=0.02..54.21 rows=333 width=20)
+         Group Key: """F'_1_mars1"."tag@"
+         ->  Merge Append  (cost=0.02..50.86 rows=3 width=20)
+               Sort Key: """F'_1_mars1"."tag@"
+               ->  Custom Scan (MarsAggScan)  (cost=0.00..16.93 rows=1 width=20)
+               ->  Custom Scan (MarsAggScan)  (cost=0.00..16.93 rows=1 width=20)
+               ->  Custom Scan (MarsAggScan)  (cost=0.00..16.93 rows=1 width=20)
+ Optimizer: Postgres query optimizer
+(9 rows)
+
+select * from mars.destroy_timeseries_table('"""F''"');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table """F'";
+create table constraint_test(tag int NOT NULL, tz timestamp NOT NULL, value1 int DEFAULT(1), primary key(tag, tz)) distributed by (tag) partition by range(tz);
+select mars.build_timeseries_table('constraint_test', 'tagkey="tag", timekey="tz", timebucket="1 hour"');
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('constraint_test', '2020-01-01', '2020-01-02', '12 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                              add_partition                                               
+----------------------------------------------------------------------------------------------------------
+ (constraint_test_1_prt_1,"FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Wed Jan 01 12:00:00 2020')")
+ (constraint_test_1_prt_2,"FOR VALUES FROM ('Wed Jan 01 12:00:00 2020') TO ('Thu Jan 02 00:00:00 2020')")
+(2 rows)
+
+insert into constraint_test select i%5, '2020-01-01 00:00:00'::timestamp + concat(i, 'mins')::interval from generate_series(1, 1000) i;
+select sum(value1), count(*) from constraint_test group by tag;
+ sum | count 
+-----+-------
+ 200 |   200
+ 200 |   200
+ 200 |   200
+ 200 |   200
+ 200 |   200
+(5 rows)
+
+explain select sum(value1), count(*) from constraint_test group by tag;
+                                            QUERY PLAN                                             
+---------------------------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=319.50..336.17 rows=1000 width=20)
+   ->  Finalize HashAggregate  (cost=319.50..322.83 rows=333 width=20)
+         Group Key: constraint_test_1_prt_1.tag
+         ->  Append  (cost=137.25..304.50 rows=2000 width=20)
+               ->  Partial HashAggregate  (cost=137.25..147.25 rows=1000 width=20)
+                     Group Key: constraint_test_1_prt_1.tag
+                     ->  Seq Scan on constraint_test_1_prt_1  (cost=0.00..93.00 rows=5900 width=8)
+               ->  Partial HashAggregate  (cost=137.25..147.25 rows=1000 width=20)
+                     Group Key: constraint_test_1_prt_2.tag
+                     ->  Seq Scan on constraint_test_1_prt_2  (cost=0.00..93.00 rows=5900 width=8)
+ Optimizer: Postgres query optimizer
+(11 rows)
+
+select * from mars.list_partition('constraint_test');
+         relname         | storage 
+-------------------------+---------
+ constraint_test_1_prt_1 | heap
+ constraint_test_1_prt_2 | heap
+(2 rows)
+
+select mars.compress_partition(inhrelid::regclass) from  pg_inherits where inhparent = 'constraint_test'::regclass;
+   compress_partition    
+-------------------------
+ constraint_test_1_mars1
+ constraint_test_1_mars2
+(2 rows)
+
+select * from mars.list_partition('constraint_test');
+         relname         | storage 
+-------------------------+---------
+ constraint_test_1_mars1 | mars
+ constraint_test_1_mars2 | mars
+(2 rows)
+
+select sum(value1), count(*) from constraint_test group by tag;
+ sum | count 
+-----+-------
+ 200 |   200
+ 200 |   200
+ 200 |   200
+ 200 |   200
+ 200 |   200
+(5 rows)
+
+explain select sum(value1), count(*) from constraint_test group by tag;
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=0.01..53.51 rows=1000 width=20)
+   ->  Finalize GroupAggregate  (cost=0.01..40.17 rows=333 width=20)
+         Group Key: constraint_test_1_mars1.tag
+         ->  Merge Append  (cost=0.01..36.83 rows=2 width=20)
+               Sort Key: constraint_test_1_mars1.tag
+               ->  Custom Scan (MarsAggScan)  (cost=0.00..18.40 rows=1 width=20)
+               ->  Custom Scan (MarsAggScan)  (cost=0.00..18.40 rows=1 width=20)
+ Optimizer: Postgres query optimizer
+(8 rows)
+
+select mars.destroy_timeseries_table('constraint_test');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table constraint_test;
+CREATE TABLE foo(
+    time timestamp(6) with time zone,
+    tag_id int not null,
+    measurement int,
+    unique (tag_id, time)
+)
+Distributed by (tag_id)
+Partition by range(time);
+SELECT mars.build_timeseries_table('foo','tagkey="tag_id", timekey="time", timebucket="1 hour"');
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+SELECT mars.add_partition('foo', '2021-04-01', '1 day');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                            add_partition                                             
+------------------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Thu Apr 01 00:00:00 2021 PDT') TO ('Fri Apr 02 00:00:00 2021 PDT')")
+(1 row)
+
+insert into foo select '2021-04-01 00:00:00'::timestamp + concat(i, 'mins')::interval, i%5, i/100 from generate_series(1, 1000) i;
+select sum(measurement), count(measurement) from foo group by tag_id;
+ sum | count 
+-----+-------
+ 900 |   200
+ 910 |   200
+ 900 |   200
+ 900 |   200
+ 900 |   200
+(5 rows)
+
+explain select sum(measurement), count(measurement) from foo group by tag_id;
+                                     QUERY PLAN                                     
+------------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=137.25..153.92 rows=1000 width=20)
+   ->  HashAggregate  (cost=137.25..140.58 rows=333 width=20)
+         Group Key: foo_1_prt_1.tag_id
+         ->  Seq Scan on foo_1_prt_1  (cost=0.00..93.00 rows=5900 width=8)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_prt_1 | heap
+(1 row)
+
+select mars.compress_partition(inhrelid::regclass) from pg_inherits where inhparent = 'foo'::regclass;
+ compress_partition 
+--------------------
+ foo_1_mars1
+(1 row)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars1 | mars
+(1 row)
+
+select sum(measurement), count(measurement) from foo group by tag_id;
+ sum | count 
+-----+-------
+ 910 |   200
+ 900 |   200
+ 900 |   200
+ 900 |   200
+ 900 |   200
+(5 rows)
+
+explain select sum(measurement), count(measurement) from foo group by tag_id;
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=0.00..35.07 rows=1000 width=20)
+   ->  Finalize GroupAggregate  (cost=0.00..21.74 rows=333 width=20)
+         Group Key: foo_1_mars1.tag_id
+         ->  Custom Scan (MarsAggScan)  (cost=0.00..18.40 rows=1 width=20)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+CREATE TABLE foo_1_mars1 (a int);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'a' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+CREATE TABLE foo(
+    "'Tim""" timestamp(6) with time zone,
+    "TAG" int not null,
+    measurement int,
+    unique ("TAG", "'Tim""")
+)
+Distributed by ("TAG")
+Partition by range("'Tim""");
+SELECT mars.build_timeseries_table('foo','tagkey="TAG", timekey="''Tim""", timebucket="1 hour"');
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+SELECT mars.add_partition('foo', '2021-04-01', '1 day');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                            add_partition                                             
+------------------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Thu Apr 01 00:00:00 2021 PDT') TO ('Fri Apr 02 00:00:00 2021 PDT')")
+(1 row)
+
+insert into foo select '2021-04-01 00:00:00'::timestamp + concat(i, 'mins')::interval, i%5, i/100 from generate_series(1, 1000) i;
+select sum(measurement), count(measurement) from foo group by "TAG";
+ sum | count 
+-----+-------
+ 900 |   200
+ 910 |   200
+ 900 |   200
+ 900 |   200
+ 900 |   200
+(5 rows)
+
+explain select sum(measurement), count(measurement) from foo group by "TAG";
+                                     QUERY PLAN                                     
+------------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=137.25..153.92 rows=1000 width=20)
+   ->  HashAggregate  (cost=137.25..140.58 rows=333 width=20)
+         Group Key: foo_1_prt_1."TAG"
+         ->  Seq Scan on foo_1_prt_1  (cost=0.00..93.00 rows=5900 width=8)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select count(*) from pg_index where indrelid = (select inhrelid from pg_inherits where inhparent = 'foo'::regclass);
+ count 
+-------
+     2
+(1 row)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_prt_1 | heap
+(1 row)
+
+select mars.compress_partition(inhrelid::regclass) from pg_inherits where inhparent = 'foo'::regclass;
+ compress_partition 
+--------------------
+ foo_1_mars2
+(1 row)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars2 | mars
+(1 row)
+
+select count(*) from pg_index where indexrelid = (select inhrelid from pg_inherits where inhparent = 'foo'::regclass);
+ count 
+-------
+     0
+(1 row)
+
+select sum(measurement), count(measurement) from foo group by "TAG";
+ sum | count 
+-----+-------
+ 910 |   200
+ 900 |   200
+ 900 |   200
+ 900 |   200
+ 900 |   200
+(5 rows)
+
+explain select sum(measurement), count(measurement) from foo group by "TAG";
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=0.00..35.07 rows=1000 width=20)
+   ->  Finalize GroupAggregate  (cost=0.00..21.74 rows=333 width=20)
+         Group Key: foo_1_mars2."TAG"
+         ->  Custom Scan (MarsAggScan)  (cost=0.00..18.40 rows=1 width=20)
+ Optimizer: Postgres query optimizer
+(5 rows)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+DROP TABLE foo_1_mars1;
+set timezone to 'Asia/Shanghai';
+create table foo ( tag int ,tz timestamp(6) , measurement float ) distributed by (tag) partition by range(tz);
+select mars.build_timeseries_table('foo','tagkey="tag", timekey="tz", timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('foo', '2021-01-01', '2021-01-02','1 day');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Fri Jan 01 00:00:00 2021') TO ('Sat Jan 02 00:00:00 2021')")
+(1 row)
+
+select mars.add_partition('foo', '2021-01-01 20:00:00+4', '2021-01-03','1 day');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_2,"FOR VALUES FROM ('Sat Jan 02 00:00:00 2021') TO ('Sun Jan 03 00:00:00 2021')")
+(1 row)
+
+select mars.add_partition('foo', '2021-01-03', '2021-01-03 21:00:00+5','1 day');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_3,"FOR VALUES FROM ('Sun Jan 03 00:00:00 2021') TO ('Mon Jan 04 00:00:00 2021')")
+(1 row)
+
+select mars.add_partition('foo', '2021-01-03 22:00:00+6', '2021-01-04 23:00:00+7','1 day');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_4,"FOR VALUES FROM ('Mon Jan 04 00:00:00 2021') TO ('Tue Jan 05 00:00:00 2021')")
+(1 row)
+
+select mars.add_partition('foo', '2021-01-05', '2021-01-06','1 day');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_5,"FOR VALUES FROM ('Tue Jan 05 00:00:00 2021') TO ('Wed Jan 06 00:00:00 2021')")
+(1 row)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+CREATE TABLE foo (
+    "Z" timestamp(2)
+    , z int
+    , ts timestamp
+)
+DISTRIBUTED BY (z)
+PARTITION BY RANGE (ts)
+;
+SELECT mars.build_timeseries_table('foo','tagkey=z, timekey=ts, timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+SELECT mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+DROP TABLE foo;
+-- test table merge
+create table """F'" ( "tag@" int, "timestamp" timestamptz, measurement float) distributed by ("tag@") partition by range("timestamp");
+select mars.build_timeseries_table('"""F''"','tagkey="tag@", timekey="timestamp", timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('"""F''"', '2020-01-01', '2020-01-02','8 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                                 add_partition                                                 
+---------------------------------------------------------------------------------------------------------------
+ ("""""""F'_1_prt_1""","FOR VALUES FROM ('Wed Jan 01 00:00:00 2020 CST') TO ('Wed Jan 01 08:00:00 2020 CST')")
+ ("""""""F'_1_prt_2""","FOR VALUES FROM ('Wed Jan 01 08:00:00 2020 CST') TO ('Wed Jan 01 16:00:00 2020 CST')")
+ ("""""""F'_1_prt_3""","FOR VALUES FROM ('Wed Jan 01 16:00:00 2020 CST') TO ('Thu Jan 02 00:00:00 2020 CST')")
+(3 rows)
+
+insert into """F'" select i%5, '2020-01-01 08:00:00+08'::timestamptz + concat(i/100, 'mins')::interval, i/100 from generate_series(1, 10000) i;
+select sum(measurement), count(measurement) from """F'" group by "tag@";
+  sum  | count 
+-------+-------
+ 99000 |  2000
+ 99100 |  2000
+ 99000 |  2000
+ 99000 |  2000
+ 99000 |  2000
+(5 rows)
+
+explain select sum(measurement), count(measurement) from """F'" group by "tag@";
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=454.75..471.42 rows=1000 width=20)
+   ->  Finalize HashAggregate  (cost=454.75..458.08 rows=333 width=20)
+         Group Key: """F'_1_prt_1"."tag@"
+         ->  Append  (cost=129.08..432.25 rows=3000 width=20)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: """F'_1_prt_1"."tag@"
+                     ->  Seq Scan on """F'_1_prt_1"  (cost=0.00..88.33 rows=5433 width=12)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: """F'_1_prt_2"."tag@"
+                     ->  Seq Scan on """F'_1_prt_2"  (cost=0.00..88.33 rows=5433 width=12)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: """F'_1_prt_3"."tag@"
+                     ->  Seq Scan on """F'_1_prt_3"  (cost=0.00..88.33 rows=5433 width=12)
+ Optimizer: Postgres query optimizer
+(14 rows)
+
+select * from mars.list_partition('"""F''"');
+    relname     | storage 
+----------------+---------
+ """F'_1_prt_1" | heap
+ """F'_1_prt_2" | heap
+ """F'_1_prt_3" | heap
+(3 rows)
+
+select mars.compress_partition(inhrelid::regclass, '1 day') from  pg_inherits where inhparent = '"""F''"'::regclass;
+ERROR:  partition ""F'_1_mars1" would overlap partition ""F'_1_prt_2"
+CONTEXT:  SQL statement "ALTER TABLE """F'" ATTACH PARTITION public."""F'_1_mars1" FOR VALUES FROM ('Wed Jan 01 00:00:00 2020 CST') TO ('Wed Jan 01 08:00:00 2020 CST')"
+PL/pgSQL function mars.compress_relation_(regclass,regclass) line 98 at EXECUTE
+PL/pgSQL function mars.compress_partition(regclass,interval) line 21 at assignment
+select * from mars.list_partition('"""F''"');
+    relname     | storage 
+----------------+---------
+ """F'_1_prt_1" | heap
+ """F'_1_prt_2" | heap
+ """F'_1_prt_3" | heap
+(3 rows)
+
+select sum(measurement), count(measurement) from """F'" group by "tag@";
+  sum  | count 
+-------+-------
+ 99000 |  2000
+ 99100 |  2000
+ 99000 |  2000
+ 99000 |  2000
+ 99000 |  2000
+(5 rows)
+
+explain select sum(measurement), count(measurement) from """F'" group by "tag@";
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)  (cost=454.75..471.42 rows=1000 width=20)
+   ->  Finalize HashAggregate  (cost=454.75..458.08 rows=333 width=20)
+         Group Key: """F'_1_prt_1"."tag@"
+         ->  Append  (cost=129.08..432.25 rows=3000 width=20)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: """F'_1_prt_1"."tag@"
+                     ->  Seq Scan on """F'_1_prt_1"  (cost=0.00..88.33 rows=5433 width=12)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: """F'_1_prt_2"."tag@"
+                     ->  Seq Scan on """F'_1_prt_2"  (cost=0.00..88.33 rows=5433 width=12)
+               ->  Partial HashAggregate  (cost=129.08..139.08 rows=1000 width=20)
+                     Group Key: """F'_1_prt_3"."tag@"
+                     ->  Seq Scan on """F'_1_prt_3"  (cost=0.00..88.33 rows=5433 width=12)
+ Optimizer: Postgres query optimizer
+(14 rows)
+
+select * from mars.destroy_timeseries_table('"""F''"');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table """F'";
+-- merge by order
+create table foo (tag int, ts timestamp, col int) distributed by (tag) partition by range (ts);
+select mars.build_timeseries_table('foo', 'tagkey=tag, timekey=ts, timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('foo', '2020-01-01', '2020-01-02', '8 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Wed Jan 01 08:00:00 2020')")
+ (foo_1_prt_2,"FOR VALUES FROM ('Wed Jan 01 08:00:00 2020') TO ('Wed Jan 01 16:00:00 2020')")
+ (foo_1_prt_3,"FOR VALUES FROM ('Wed Jan 01 16:00:00 2020') TO ('Thu Jan 02 00:00:00 2020')")
+(3 rows)
+
+insert into foo select i%5, '2020-01-01 08:00:00'::timestamp + concat(i/100, 'mins')::interval, i/100 from generate_series(1, 10000) i;
+select mars.compress_partition(inhrelid::regclass, '1 day') from  pg_inherits where inhparent = 'foo'::regclass order by inhrelid;
+ compress_partition 
+--------------------
+ foo_1_mars1
+ foo_1_mars2
+ foo_1_mars2
+(3 rows)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars1 | mars
+ foo_1_mars2 | mars
+(2 rows)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+-- merge by reverse order
+create table foo (tag int, ts timestamp, col int) distributed by (tag) partition by range (ts);
+select mars.build_timeseries_table('foo', 'tagkey=tag, timekey=ts, timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('foo', '2020-01-01', '2020-01-02', '8 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Wed Jan 01 08:00:00 2020')")
+ (foo_1_prt_2,"FOR VALUES FROM ('Wed Jan 01 08:00:00 2020') TO ('Wed Jan 01 16:00:00 2020')")
+ (foo_1_prt_3,"FOR VALUES FROM ('Wed Jan 01 16:00:00 2020') TO ('Thu Jan 02 00:00:00 2020')")
+(3 rows)
+
+insert into foo select i%5, '2020-01-01 08:00:00'::timestamp + concat(i/100, 'mins')::interval, i/100 from generate_series(1, 10000) i;
+select mars.compress_partition(inhrelid::regclass, '1 day') from  pg_inherits where inhparent = 'foo'::regclass order by inhrelid desc;
+ compress_partition 
+--------------------
+ foo_1_mars1
+ foo_1_mars1
+ foo_1_mars2
+(3 rows)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars1 | mars
+ foo_1_mars2 | mars
+(2 rows)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+-- has gap
+create table foo (tag int, ts timestamp, col int) distributed by (tag) partition by range (ts);
+select mars.build_timeseries_table('foo', 'tagkey=tag, timekey=ts, timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('foo', '2020-01-01 00:00:00', '2020-01-01 12:00:00', '4 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Wed Jan 01 04:00:00 2020')")
+ (foo_1_prt_2,"FOR VALUES FROM ('Wed Jan 01 04:00:00 2020') TO ('Wed Jan 01 08:00:00 2020')")
+ (foo_1_prt_3,"FOR VALUES FROM ('Wed Jan 01 08:00:00 2020') TO ('Wed Jan 01 12:00:00 2020')")
+(3 rows)
+
+select mars.add_partition('foo', '2020-01-01 16:00:00', '2020-01-02 0:00:00', '4 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_4,"FOR VALUES FROM ('Wed Jan 01 16:00:00 2020') TO ('Wed Jan 01 20:00:00 2020')")
+ (foo_1_prt_5,"FOR VALUES FROM ('Wed Jan 01 20:00:00 2020') TO ('Thu Jan 02 00:00:00 2020')")
+(2 rows)
+
+select mars.compress_partition(inhrelid::regclass, '1 day') from  pg_inherits where inhparent = 'foo'::regclass order by inhrelid desc;
+ compress_partition 
+--------------------
+ foo_1_mars1
+ foo_1_mars1
+ foo_1_mars2
+ foo_1_mars3
+ foo_1_mars3
+(5 rows)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars1 | mars
+ foo_1_mars2 | mars
+ foo_1_mars3 | mars
+(3 rows)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+-- not align
+create table foo (tag int, ts timestamp, col int) distributed by (tag) partition by range (ts);
+select mars.build_timeseries_table('foo', 'tagkey=tag, timekey=ts, timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('foo', '2020-01-01', '2020-01-02', '5 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Wed Jan 01 05:00:00 2020')")
+ (foo_1_prt_2,"FOR VALUES FROM ('Wed Jan 01 05:00:00 2020') TO ('Wed Jan 01 10:00:00 2020')")
+ (foo_1_prt_3,"FOR VALUES FROM ('Wed Jan 01 10:00:00 2020') TO ('Wed Jan 01 15:00:00 2020')")
+ (foo_1_prt_4,"FOR VALUES FROM ('Wed Jan 01 15:00:00 2020') TO ('Wed Jan 01 20:00:00 2020')")
+ (foo_1_prt_5,"FOR VALUES FROM ('Wed Jan 01 20:00:00 2020') TO ('Thu Jan 02 00:00:00 2020')")
+(5 rows)
+
+insert into foo select i%5, '2020-01-01 08:00:00'::timestamp + concat(i/100, 'mins')::interval, i/100 from generate_series(1, 10000) i;
+select mars.compress_partition(inhrelid::regclass, '1 day') from  pg_inherits where inhparent = 'foo'::regclass order by inhrelid desc;
+ compress_partition 
+--------------------
+ foo_1_mars1
+ foo_1_mars1
+ foo_1_mars1
+ foo_1_mars2
+ foo_1_mars2
+(5 rows)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars1 | mars
+ foo_1_mars2 | mars
+(2 rows)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+set timezone to 'UTC';
+create table foo (tag int, ts timestamp, col int) distributed by (tag) partition by range (ts);
+select mars.build_timeseries_table('foo', 'tagkey=tag, timekey=ts, timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('foo', '2020-01-01 00:00:00', '2020-01-02 00:00:00', '3 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Wed Jan 01 03:00:00 2020')")
+ (foo_1_prt_2,"FOR VALUES FROM ('Wed Jan 01 03:00:00 2020') TO ('Wed Jan 01 06:00:00 2020')")
+ (foo_1_prt_3,"FOR VALUES FROM ('Wed Jan 01 06:00:00 2020') TO ('Wed Jan 01 09:00:00 2020')")
+ (foo_1_prt_4,"FOR VALUES FROM ('Wed Jan 01 09:00:00 2020') TO ('Wed Jan 01 12:00:00 2020')")
+ (foo_1_prt_5,"FOR VALUES FROM ('Wed Jan 01 12:00:00 2020') TO ('Wed Jan 01 15:00:00 2020')")
+ (foo_1_prt_6,"FOR VALUES FROM ('Wed Jan 01 15:00:00 2020') TO ('Wed Jan 01 18:00:00 2020')")
+ (foo_1_prt_7,"FOR VALUES FROM ('Wed Jan 01 18:00:00 2020') TO ('Wed Jan 01 21:00:00 2020')")
+ (foo_1_prt_8,"FOR VALUES FROM ('Wed Jan 01 21:00:00 2020') TO ('Thu Jan 02 00:00:00 2020')")
+(8 rows)
+
+insert into foo select i%5, '2020-01-01 00:00:00'::timestamp + concat(i/10, 'mins')::interval, i/10 from generate_series(1, 10000) i;
+select mars.compress_partition(inhrelid::regclass, '4 hour') from  pg_inherits where inhparent = 'foo'::regclass order by inhrelid;
+ compress_partition 
+--------------------
+ foo_1_mars1
+ foo_1_mars1
+ foo_1_mars2
+ foo_1_mars3
+ foo_1_mars4
+ foo_1_mars4
+ foo_1_mars5
+ foo_1_mars6
+(8 rows)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars1 | mars
+ foo_1_mars2 | mars
+ foo_1_mars3 | mars
+ foo_1_mars4 | mars
+ foo_1_mars5 | mars
+ foo_1_mars6 | mars
+(6 rows)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+-- merge not by time series
+create table foo (tag int, ts timestamp, col int) distributed by (tag) partition by range (ts);
+select mars.build_timeseries_table('foo', 'tagkey=tag, timekey=ts, timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('foo', '2020-01-01 00:00:00', '2020-01-02 00:00:00', '8 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Wed Jan 01 08:00:00 2020')")
+ (foo_1_prt_2,"FOR VALUES FROM ('Wed Jan 01 08:00:00 2020') TO ('Wed Jan 01 16:00:00 2020')")
+ (foo_1_prt_3,"FOR VALUES FROM ('Wed Jan 01 16:00:00 2020') TO ('Thu Jan 02 00:00:00 2020')")
+(3 rows)
+
+insert into foo select i%5, '2020-01-01 00:00:00'::timestamp + concat(i/10, 'mins')::interval, i/10 from generate_series(1, 10000) i;
+select mars.compress_partition('foo_1_prt_3', '1 day');
+ compress_partition 
+--------------------
+ foo_1_mars1
+(1 row)
+
+select mars.compress_partition('foo_1_prt_1', '1 day');
+ compress_partition 
+--------------------
+ foo_1_mars2
+(1 row)
+
+select mars.compress_partition('foo_1_prt_2', '1 day');
+ compress_partition 
+--------------------
+ foo_1_mars1
+(1 row)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars2 | mars
+ foo_1_mars1 | mars
+(2 rows)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+-- partition table with index
+create table foo (tag int, ts timestamp, col int, unique(tag,ts)) distributed by (tag) partition by range (ts);
+select mars.build_timeseries_table('foo', 'tagkey=tag, timekey=ts, timebucket="1 hour"', true);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition('foo', '2020-01-01 00:00:00', '2020-01-02 00:00:00', '8 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Wed Jan 01 08:00:00 2020')")
+ (foo_1_prt_2,"FOR VALUES FROM ('Wed Jan 01 08:00:00 2020') TO ('Wed Jan 01 16:00:00 2020')")
+ (foo_1_prt_3,"FOR VALUES FROM ('Wed Jan 01 16:00:00 2020') TO ('Thu Jan 02 00:00:00 2020')")
+(3 rows)
+
+insert into foo select i%5, '2020-01-01 00:00:00'::timestamp + concat(i/10., 'mins')::interval, i/10 from generate_series(1, 10000) i;
+select mars.compress_partition('foo_1_prt_1', '1 day');
+ compress_partition 
+--------------------
+ foo_1_mars1
+(1 row)
+
+select mars.compress_partition('foo_1_prt_2', '1 day');
+ compress_partition 
+--------------------
+ foo_1_mars1
+(1 row)
+
+select mars.compress_partition('foo_1_prt_3', '1 day');
+ compress_partition 
+--------------------
+ foo_1_mars1
+(1 row)
+
+select * from mars.list_partition('foo');
+   relname   | storage 
+-------------+---------
+ foo_1_mars1 | mars
+(1 row)
+
+-- test insert failed by UNIQUE check.
+select mars.add_partition('foo', '2020-01-02 00:00:00', '2020-01-03 00:00:00', '8 hour');
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                        add_partition                                         
+----------------------------------------------------------------------------------------------
+ (foo_1_prt_1,"FOR VALUES FROM ('Thu Jan 02 00:00:00 2020') TO ('Thu Jan 02 08:00:00 2020')")
+ (foo_1_prt_2,"FOR VALUES FROM ('Thu Jan 02 08:00:00 2020') TO ('Thu Jan 02 16:00:00 2020')")
+ (foo_1_prt_3,"FOR VALUES FROM ('Thu Jan 02 16:00:00 2020') TO ('Fri Jan 03 00:00:00 2020')")
+(3 rows)
+
+insert into foo select 2, '2020-01-02 00:00:00'::timestamp + concat(i/10, 'mins')::interval, i/10 from generate_series(1, 10000) i;
+ERROR:  duplicate key value violates unique constraint "foo_1_prt_1_tag_ts_key"  (seg0 127.0.0.1:7002 pid=37559)
+DETAIL:  Key (tag, ts)=(2, Thu Jan 02 00:00:00 2020) already exists.
+explain (costs off) select sum(col), count(col) from foo group by tag;
+                   QUERY PLAN                    
+-------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   ->  Finalize HashAggregate
+         Group Key: foo_1_mars1.tag
+         ->  Append
+               ->  Custom Scan (MarsAggScan)
+               ->  Partial HashAggregate
+                     Group Key: foo_1_prt_1.tag
+                     ->  Seq Scan on foo_1_prt_1
+               ->  Partial HashAggregate
+                     Group Key: foo_1_prt_2.tag
+                     ->  Seq Scan on foo_1_prt_2
+               ->  Partial HashAggregate
+                     Group Key: foo_1_prt_3.tag
+                     ->  Seq Scan on foo_1_prt_3
+ Optimizer: Postgres query optimizer
+(15 rows)
+
+select sum(col), count(col) from foo group by tag;
+   sum   | count 
+---------+-------
+  999000 |  2000
+ 1000000 |  2000
+  999000 |  2000
+  999000 |  2000
+  999000 |  2000
+(5 rows)
+
+-- test upsert in heap table
+insert into foo select i%5, '2020-01-02 00:00:00'::timestamp + concat(i/10, 'mins')::interval, i/10 from generate_series(1, 10000) i on conflict (tag,ts) do nothing;
+explain (costs off) select sum(col), count(col) from foo group by tag;
+                   QUERY PLAN                    
+-------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   ->  Finalize HashAggregate
+         Group Key: foo_1_mars1.tag
+         ->  Append
+               ->  Custom Scan (MarsAggScan)
+               ->  Partial HashAggregate
+                     Group Key: foo_1_prt_1.tag
+                     ->  Seq Scan on foo_1_prt_1
+               ->  Partial HashAggregate
+                     Group Key: foo_1_prt_2.tag
+                     ->  Seq Scan on foo_1_prt_2
+               ->  Partial HashAggregate
+                     Group Key: foo_1_prt_3.tag
+                     ->  Seq Scan on foo_1_prt_3
+ Optimizer: Postgres query optimizer
+(15 rows)
+
+select sum(col), count(col) from foo group by tag;
+   sum   | count 
+---------+-------
+ 1498500 |  3000
+ 1500500 |  3001
+ 1498500 |  3000
+ 1498500 |  3000
+ 1498500 |  3000
+(5 rows)
+
+select mars.destroy_timeseries_table('foo');
+ destroy_timeseries_table 
+--------------------------
+ t
+(1 row)
+
+drop table foo;
+-- test varlen type as tagkey
+CREATE TABLE test_varlen_as_tag1(
+     ts timestamp with time zone,
+     tag_id name,
+     read float,
+     write float
+ )
+ Distributed by (tag_id)
+ Partition by range(ts);
+CREATE TABLE test_varlen_as_tag2(
+     ts timestamp with time zone,
+     tag_id text,
+     read float,
+     write float
+ )
+ Distributed by (tag_id)
+ Partition by range(ts);
+CREATE TABLE test_varlen_as_tag3(
+     ts timestamp with time zone,
+     tag_id varchar,
+     read float,
+     write float
+ )
+ Distributed by (tag_id)
+ Partition by range(ts);
+CREATE TABLE test_varlen_as_tag4(
+     ts timestamp with time zone,
+     tag_id NUMERIC,
+     read float,
+     write float
+ )
+ Distributed by (tag_id)
+ Partition by range(ts);
+CREATE TABLE test_varlen_as_tag5(
+     ts timestamp with time zone,
+     tag_id INTERVAL,
+     read float,
+     write float
+ )
+ Distributed by (tag_id)
+ Partition by range(ts);
+SELECT mars.build_timeseries_table('test_varlen_as_tag1', 'tagkey="tag_id", timekey="ts", timebucket="1 day"');
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+SELECT mars.build_timeseries_table('test_varlen_as_tag2', 'tagkey="tag_id", timekey="ts", timebucket="1 day"');
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+SELECT mars.build_timeseries_table('test_varlen_as_tag3', 'tagkey="tag_id", timekey="ts", timebucket="1 day"');
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+SELECT mars.build_timeseries_table('test_varlen_as_tag4', 'tagkey="tag_id", timekey="ts", timebucket="1 day"');
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+SELECT mars.build_timeseries_table('test_varlen_as_tag5', 'tagkey="tag_id", timekey="ts", timebucket="1 day"');
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+DROP TABLE test_varlen_as_tag1;
+DROP TABLE test_varlen_as_tag2;
+DROP TABLE test_varlen_as_tag3;
+DROP TABLE test_varlen_as_tag4;
+DROP TABLE test_varlen_as_tag5;
+-- test mars.get_bloat_info
+create table foo (c1 int, c2 int) using mars with(group_col_='{c1}') distributed by (c1);
+insert into foo select i/3, i%3 from generate_series(0,8) i;
+select * from mars.get_bloat_info('foo');
+ total_blocks | bloat_blocks 
+--------------+--------------
+            3 |            0
+(1 row)
+
+insert into foo values (1, 10);
+select * from mars.get_bloat_info('foo');
+ total_blocks | bloat_blocks 
+--------------+--------------
+            4 |            0
+(1 row)
+
+insert into foo values (2, 10);
+select * from mars.get_bloat_info('foo');
+ total_blocks | bloat_blocks 
+--------------+--------------
+            5 |            0
+(1 row)
+
+insert into foo values (3, 10);
+select * from mars.get_bloat_info('foo');
+ total_blocks | bloat_blocks 
+--------------+--------------
+            6 |            0
+(1 row)
+
+select * from mars.get_bloat_info(null);
+ total_blocks | bloat_blocks 
+--------------+--------------
+(0 rows)
+
+drop table foo;
+--
+-- allow multiple tagkeys
+--
+\set tname test_mars_udf_multi_groupkeys_t1
+create table :tname (tag1 int, tag2 bigint, ts timestamp)
+ distributed by (tag1, tag2)
+ partition by range(ts);
+select mars.build_timeseries_table(:'tname', $$
+    tagkey = '{ tag1, tag2 }',
+    timekey = ts,
+    timebucket = '1 hour'
+$$);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition(:'tname', '2020-01-01', '2 days');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                                       add_partition                                                       
+---------------------------------------------------------------------------------------------------------------------------
+ (test_mars_udf_multi_groupkeys_t1_1_prt_1,"FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Fri Jan 03 00:00:00 2020')")
+(1 row)
+
+select mars.add_partition(:'tname', '2020-01-03', '2020-01-04', '1 day');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                                       add_partition                                                       
+---------------------------------------------------------------------------------------------------------------------------
+ (test_mars_udf_multi_groupkeys_t1_1_prt_2,"FOR VALUES FROM ('Fri Jan 03 00:00:00 2020') TO ('Sat Jan 04 00:00:00 2020')")
+(1 row)
+
+select mars.compress_partition(inhrelid::regclass)
+  from pg_inherits
+ where inhparent = :'tname'::regclass;
+            compress_partition            
+------------------------------------------
+ test_mars_udf_multi_groupkeys_t1_1_mars1
+ test_mars_udf_multi_groupkeys_t1_1_mars2
+(2 rows)
+
+--
+-- allow multiple tagkeys with special chars in column names
+--
+\set tname test_mars_udf_multi_groupkeys_t2
+create table :tname ("{a, b}" int, "<""x""; 'y'>" bigint, ts timestamp)
+ distributed by ("{a, b}", "<""x""; 'y'>")
+ partition by range(ts);
+select mars.build_timeseries_table(:'tname', $$
+    tagkey = '{ "{a, b}", "<\"x\"; ''y''>" }',
+    timekey = 'ts',
+    timebucket = '1 hour'
+$$);
+ build_timeseries_table 
+------------------------
+ t
+(1 row)
+
+select mars.add_partition(:'tname', '2020-01-01', '2 days');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                                       add_partition                                                       
+---------------------------------------------------------------------------------------------------------------------------
+ (test_mars_udf_multi_groupkeys_t2_1_prt_1,"FOR VALUES FROM ('Wed Jan 01 00:00:00 2020') TO ('Fri Jan 03 00:00:00 2020')")
+(1 row)
+
+select mars.add_partition(:'tname', '2020-01-03', '2020-01-04', '1 day');
+NOTICE:  table has parent, setting distribution columns to match parent table
+                                                       add_partition                                                       
+---------------------------------------------------------------------------------------------------------------------------
+ (test_mars_udf_multi_groupkeys_t2_1_prt_2,"FOR VALUES FROM ('Fri Jan 03 00:00:00 2020') TO ('Sat Jan 04 00:00:00 2020')")
+(1 row)
+
+select mars.compress_partition(inhrelid::regclass)
+  from pg_inherits
+ where inhparent = :'tname'::regclass;
+            compress_partition            
+------------------------------------------
+ test_mars_udf_multi_groupkeys_t2_1_mars1
+ test_mars_udf_multi_groupkeys_t2_1_mars2
+(2 rows)
+

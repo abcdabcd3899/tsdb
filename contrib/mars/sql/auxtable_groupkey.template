@@ -1,0 +1,18 @@
+\out /dev/null
+select segrelid as aux_table_oid
+     , segrelid::regclass::name as aux_table_name
+  from mx_mars
+ where relid = :tnamestr::regclass;
+\out
+
+\gset
+\set aux_table_name_str '''' :aux_table_name ''''
+
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_table_oid and attnum >= 12;
+
+insert into :tname
+  select i, i/8, i/2.0, '2021-07-15 05:13:20'::timestamp + 15 * (i%8) * interval '1 second', i from generate_series(0, 15) i;
+
+select count(*)
+  from pg_index where indrelid = :aux_table_oid;

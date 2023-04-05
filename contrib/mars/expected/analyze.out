@@ -1,0 +1,33 @@
+DROP DATABASE IF EXISTS testanalyze;
+CREATE DATABASE testanalyze;
+\c testanalyze
+CREATE EXTENSION matrixts;
+CREATE EXTENSION mars;
+create extension if not exists gp_debug_numsegments;
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+DROP TABLE if exists foo;
+NOTICE:  table "foo" does not exist, skipping
+CREATE TABLE foo (a int, b int) using mars;
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'a' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+insert into foo select i, i*2 from generate_series(1, 1024) i;
+insert into foo select i, i*2 from generate_series(2049, 4096) i;
+analyze foo;
+select relname, reltuples from pg_class where relname like 'foo';
+ relname | reltuples 
+---------+-----------
+ foo     |      3072
+(1 row)
+
+select * from pg_stats where tablename like 'foo' order by attname;
+ schemaname | tablename | attname | inherited | null_frac | avg_width | n_distinct | most_common_vals | most_common_freqs |                                                                                                                                                                                                                                            histogram_bounds                                                                                                                                                                                                                                            | correlation | most_common_elems | most_common_elem_freqs | elem_count_histogram 
+------------+-----------+---------+-----------+-----------+-----------+------------+------------------+-------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+-------------------+------------------------+----------------------
+ public     | foo       | a       | f         |         0 |         4 |         -1 |                  |                   | {1,31,62,93,123,154,185,215,246,277,308,338,369,400,430,461,492,523,553,584,615,645,676,707,738,768,799,830,860,891,922,953,983,1014,2069,2099,2130,2161,2191,2222,2253,2284,2314,2345,2376,2406,2437,2468,2499,2529,2560,2591,2621,2652,2683,2714,2744,2775,2806,2836,2867,2898,2929,2959,2990,3021,3051,3082,3113,3143,3174,3205,3236,3266,3297,3328,3358,3389,3420,3451,3481,3512,3543,3573,3604,3635,3666,3696,3727,3758,3788,3819,3850,3881,3911,3942,3973,4003,4034,4065,4096}                   |           1 |                   |                        | 
+ public     | foo       | b       | f         |         0 |         4 |         -1 |                  |                   | {2,62,124,186,246,308,370,430,492,554,616,676,738,800,860,922,984,1046,1106,1168,1230,1290,1352,1414,1476,1536,1598,1660,1720,1782,1844,1906,1966,2028,4138,4198,4260,4322,4382,4444,4506,4568,4628,4690,4752,4812,4874,4936,4998,5058,5120,5182,5242,5304,5366,5428,5488,5550,5612,5672,5734,5796,5858,5918,5980,6042,6102,6164,6226,6286,6348,6410,6472,6532,6594,6656,6716,6778,6840,6902,6962,7024,7086,7146,7208,7270,7332,7392,7454,7516,7576,7638,7700,7762,7822,7884,7946,8006,8068,8130,8192} |           1 |                   |                        | 
+(2 rows)
+

@@ -1,0 +1,45 @@
+set mars.enable_customscan to off;
+
+select batch, sum(i4), sum(i8), sum(f4), sum(f8)
+  from :tname
+ group by batch
+ order by batch
+;
+
+set mars.enable_customscan to on;
+
+explain (verbose, costs off)
+select batch, sum(i4), sum(i8), sum(f4), sum(f8)
+  from :tname
+ group by batch
+ order by batch
+;
+
+select batch, sum(i4), sum(i8), sum(f4), sum(f8)
+  from :tname
+ group by batch
+ order by batch
+;
+
+set mars.enable_customscan to off;
+
+select batch, avg(i4), avg(i8), avg(f4), avg(f8)
+  from :tname
+ group by batch
+ order by batch
+;
+
+set mars.enable_customscan to on;
+
+explain (verbose, costs off)
+select batch, avg(i4), avg(i8), avg(f4), avg(f8)
+  from :tname
+ group by batch
+ order by batch
+;
+
+select batch, avg(i4), avg(i8), avg(f4), avg(f8)
+  from :tname
+ group by batch
+ order by batch
+;

@@ -1,0 +1,25 @@
+-- start_matchsubs
+--m/Index Scan on t_data_\S*/
+--s/Index Scan on t_data_\S*/Index Scan on i_data/
+
+m/Index Scan using t_data_\S* on t_data_\S*/
+s/Index Scan using t_data_\S* on t_data_\S*/Index Scan using i_data on t_data/
+
+m/Heap Scan on t_data_\S*/
+s/Heap Scan on t_data_\S*/Heap Scan on t_data/
+
+m/^\s*QUERY PLAN\s*$/
+s/^\s*QUERY PLAN\s*$/  QUERY PLAN  \n/
+
+m/^-*$/
+s/^-*$/--------------\n/
+
+m/Motion \d+:\d+/
+s/Motion \d+:\d+/Motion M:N/
+
+m/segments: \d+/
+s/segments: \d+/segments: M/
+
+m/missing relpartbound for relation \d+/
+s/missing relpartbound for relation \d+/missing relpartbound for relation OID/
+-- end_matchsubs

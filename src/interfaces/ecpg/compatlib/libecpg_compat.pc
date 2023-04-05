@@ -1,0 +1,9 @@
+Name: libecpg_compat
+Description: PostgreSQL libecpg_compat library
+Url: http://www.postgresql.org/
+Version: 12
+Requires: 
+Requires.private: libecpg libpgtypes
+Cflags: -I/home/parallels/opt/mxdb/include
+Libs: -L/home/parallels/opt/mxdb/lib -lecpg_compat
+Libs.private:  -lm

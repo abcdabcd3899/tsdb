@@ -1,0 +1,444 @@
+-- start_matchsubs
+--
+-- m/^ERROR:  Error on receive from seg0.*: server closed the connection unexpectedly/
+-- s/^ERROR:  Error on receive from seg0.*: server closed the connection unexpectedly/ERROR: server closed the connection unexpectedly/
+--
+-- end_matchsubs
+
+-- start_ignore
+create extension if not exists matrixts;
+CREATE
+-- end_ignore
+
+CREATE TABLE sheap_foo(c1 text, c2 text) using sortheap;
+CREATE
+CREATE INDEX sheap_idx on sheap_foo using sortheap_btree(c1, c2);
+CREATE
+
+--
+-- MVCC tests
+--
+1: BEGIN;
+BEGIN
+1: insert into sheap_foo values (1, 'session1');
+INSERT 1
+1: insert into sheap_foo values (2, 'session1');
+INSERT 1
+2: BEGIN;
+BEGIN
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+1: COMMIT;
+COMMIT
+2: SELECT * from sheap_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 2  | session1 
+(2 rows)
+2: COMMIT;
+COMMIT
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+1: BEGIN;
+BEGIN
+1: insert into sheap_foo values (1, 'session1');
+INSERT 1
+1: insert into sheap_foo values (2, 'session1');
+INSERT 1
+2: BEGIN;
+BEGIN
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+1: ABORT;
+ABORT
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: COMMIT;
+COMMIT
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- Test isolation level read commited
+1: BEGIN;
+BEGIN
+1: insert into sheap_foo values (1, 'session1');
+INSERT 1
+1: insert into sheap_foo values (2, 'session1');
+INSERT 1
+2: BEGIN;
+BEGIN
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+3: BEGIN;
+BEGIN
+3: insert into sheap_foo values (1, 'session3');
+INSERT 1
+3: insert into sheap_foo values (2, 'session3');
+INSERT 1
+3: COMMIT;
+COMMIT
+2: SELECT * from sheap_foo;
+ c1 | c2       
+----+----------
+ 1  | session3 
+ 2  | session3 
+(2 rows)
+2: COMMIT;
+COMMIT
+1: COMMIT;
+COMMIT
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- Test isolation level repeatable
+1: BEGIN;
+BEGIN
+1: insert into sheap_foo values (1, 'session1');
+INSERT 1
+1: insert into sheap_foo values (2, 'session1');
+INSERT 1
+2: BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+BEGIN
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+3: BEGIN;
+BEGIN
+3: insert into sheap_foo values (1, 'session3');
+INSERT 1
+3: insert into sheap_foo values (2, 'session3');
+INSERT 1
+3: COMMIT;
+COMMIT
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+2: COMMIT;
+COMMIT
+1: COMMIT;
+COMMIT
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- Test subtransaction
+1: BEGIN;
+BEGIN
+1: insert into sheap_foo values (1, 'session1');
+INSERT 1
+1: insert into sheap_foo values (2, 'session1');
+INSERT 1
+2: BEGIN;
+BEGIN
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+1: savepoint s1;
+SAVEPOINT
+1: insert into sheap_foo values (3, 'session1');
+INSERT 1
+1: insert into sheap_foo values (4, 'session1');
+INSERT 1
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+1: savepoint s1_sub;
+SAVEPOINT
+1: insert into sheap_foo values (5, 'session1');
+INSERT 1
+1: insert into sheap_foo values (6, 'session1');
+INSERT 1
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+1: release savepoint s1_sub;
+RELEASE
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+1: release savepoint s1;
+RELEASE
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+1: savepoint s1;
+SAVEPOINT
+1: insert into sheap_foo values (7, 'session1');
+INSERT 1
+1: insert into sheap_foo values (8, 'session1');
+INSERT 1
+2: SELECT * from sheap_foo;
+ c1 | c2 
+----+----
+(0 rows)
+1: rollback to s1;
+ROLLBACK
+1: COMMIT;
+COMMIT
+2: SELECT * from sheap_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 5  | session1 
+ 6  | session1 
+(6 rows)
+2: SELECT * from sheap_foo;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 5  | session1 
+ 6  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+(6 rows)
+2: COMMIT;
+COMMIT
+1: TRUNCATE sheap_foo;
+TRUNCATE
+
+-- multiple
+1: insert into sheap_foo select i, 'session1' from generate_series(1, 5) i;
+INSERT 5
+1: select gp_inject_fault('vacuum_done', 'suspend', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: insert into sheap_foo select i, 'session1' from generate_series(6, 10) i;
+INSERT 5
+1: select gp_wait_until_triggered_fault('vacuum_done', 1, 2);
+ gp_wait_until_triggered_fault 
+-------------------------------
+ Success:                      
+(1 row)
+2: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+(10 rows)
+2: set enable_indexscan to off;
+SET
+2: set enable_bitmapscan to off;
+SET
+2: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+2: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+2: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(10 rows)
+2: select * from sheap_foo order by c1;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 5  | session1 
+ 6  | session1 
+ 7  | session1 
+ 8  | session1 
+ 9  | session1 
+(10 rows)
+2: set enable_seqscan to off;
+SET
+2: set enable_indexscan to on;
+SET
+2: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+2: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+2: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(10 rows)
+1: insert into sheap_foo select i, 'session1' from generate_series(11, 15) i;
+INSERT 5
+1: select gp_inject_fault('vacuum_done', 'resume', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1: select gp_inject_fault('vacuum_done', 'reset', 2);
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+2: select * from sheap_foo;
+ c1 | c2       
+----+----------
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 15 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+(15 rows)
+2: set enable_indexscan to off;
+SET
+2: set enable_bitmapscan to off;
+SET
+2: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+2: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+2: select * from sheap_foo where c1 = '11';
+ c1 | c2       
+----+----------
+ 11 | session1 
+(1 row)
+2: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 15 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+(15 rows)
+2: select * from sheap_foo order by c1;
+ c1 | c2       
+----+----------
+ 1  | session1 
+ 10 | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 15 | session1 
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 5  | session1 
+ 6  | session1 
+ 7  | session1 
+ 8  | session1 
+ 9  | session1 
+(15 rows)
+2: set enable_seqscan to off;
+SET
+2: set enable_indexscan to on;
+SET
+2: select * from sheap_foo where c1 = '8';
+ c1 | c2       
+----+----------
+ 8  | session1 
+(1 row)
+2: select * from sheap_foo where c1 = '9';
+ c1 | c2       
+----+----------
+ 9  | session1 
+(1 row)
+2: select * from sheap_foo where c1 = '11';
+ c1 | c2       
+----+----------
+ 11 | session1 
+(1 row)
+2: select * from sheap_foo where c2 = 'session1';
+ c1 | c2       
+----+----------
+ 2  | session1 
+ 3  | session1 
+ 4  | session1 
+ 7  | session1 
+ 1  | session1 
+ 10 | session1 
+ 9  | session1 
+ 11 | session1 
+ 12 | session1 
+ 13 | session1 
+ 14 | session1 
+ 15 | session1 
+ 5  | session1 
+ 6  | session1 
+ 8  | session1 
+(15 rows)
+

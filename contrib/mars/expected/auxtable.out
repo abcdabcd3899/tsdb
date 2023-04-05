@@ -1,0 +1,2513 @@
+--
+-- verify index columns in aux table
+--
+-- start_matchsubs
+-- #   ->  Index Scan using "idx_18104_footer" on "18104_footer"
+-- m/->  Index Scan using "idx\d*__\d+_footer" on "\d+_footer"/
+-- s/->  Index Scan using "idx\d*__\d+_footer" on "\d+_footer"/->  Index Scan using "idx__###_footer" on "###_footer"/
+-- # Index Cond: ((attr2__min__c1 <= 5) AND (attr2__max__c1 >= 5))
+-- m/Index Cond: \(\(attr2__m[ai][xn]__c1 [<>]= 5\) AND \(attr2__m[ai][xn]__c1 [<>]= 5\)\)/
+-- s/Index Cond: \(\(attr2__m[ai][xn]__c1 [<>]= 5\) AND \(attr2__m[ai][xn]__c1 [<>]= 5\)\)/Index Cond: ###/
+-- end_matchsubs
+set datestyle = 'ISO';
+\set tname test_mars_auxtable_t1
+\set tnamestr '''' :tname ''''
+drop table if exists :tname;
+-- this test is sensitive to cluster size, so force all the data to be stored
+-- on seg0 only.
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+create table :tname (c0 int, c1 int, c2 int, c3 int, c4 real) using mars
+ with (group_col_ = '{c1}', group_param_col_ = '{c0 in 10}', global_order_col_ = "{c1, c0}")
+ distributed by (c1);
+\out /dev/null
+select segrelid as aux_table_oid
+     , segrelid::regclass::name as aux_table_name
+  from mx_mars
+ where relid = :tnamestr::regclass;
+\out
+\gset
+\set aux_table_name_str '''' :aux_table_name ''''
+-- verify that the orderkeys' min & max columns are stored separately in the aux table
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_table_oid and attnum >= 12;
+ attnum |          attname           | atttypid 
+--------+----------------------------+----------
+     12 | physical_edges             | bytea
+     13 | attr2__min__c1             | integer
+     14 | attr2__max__c1             | integer
+     15 | attr1__min__c0             | integer
+     16 | attr1__max__c0             | integer
+     17 | attr2__group_key__c1       | integer
+     18 | attr1__group_param_key__c0 | integer
+(7 rows)
+
+insert into :tname
+  select i, i/10, i, i, i/2.0 from generate_series(0, 30000) i;
+-- verify that min & max are stored correctly with correct types
+select attr2__min__c1, attr1__min__c0, attr2__max__c1, attr1__max__c0
+  from gp_dist_random(:aux_table_name_str) limit 10;
+ attr2__min__c1 | attr1__min__c0 | attr2__max__c1 | attr1__max__c0 
+----------------+----------------+----------------+----------------
+              0 |              0 |              0 |              9
+              1 |             10 |              1 |             19
+              2 |             20 |              2 |             29
+              3 |             30 |              3 |             39
+              4 |             40 |              4 |             49
+              5 |             50 |              5 |             59
+              6 |             60 |              6 |             69
+              7 |             70 |              7 |             79
+              8 |             80 |              8 |             89
+              9 |             90 |              9 |             99
+(10 rows)
+
+-- verify if index exists
+select count(*)
+  from pg_index where indrelid = :aux_table_oid;
+ count 
+-------
+     5
+(1 row)
+
+\out /dev/null
+-- the first aux index is always for ctid seeking, skip it
+select indexrelid as aux_index_oid,
+       indexrelid::regclass::name as aux_index_name
+  from pg_index where indrelid = :aux_table_oid
+  order by indexrelid limit 1 offset 1;
+\out
+\gset
+\set aux_index_name_str '''' :aux_index_name ''''
+-- verify the index keys
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_index_oid;
+ attnum |    attname     | atttypid 
+--------+----------------+----------
+      1 | attr2__min__c1 | integer
+      2 | attr2__max__c1 | integer
+      3 | attr1__min__c0 | integer
+      4 | attr1__max__c0 | integer
+(4 rows)
+
+set enable_seqscan to off;
+set enable_bitmapscan to off;
+set enable_indexonlyscan to off;
+-- where c1 = 5 on data table:
+-- Hard to verify plan, since index name is dynamic generated, 
+-- if we explain the query, it will become a flacky test.
+-- verify the result
+select batch
+     , rowcount >> 32 as logical_rowcount
+     , rowcount % 4294967296 as physical_rowcount
+  from gp_dist_random(:aux_table_name_str)
+  where attr2__min__c1<=5 and attr2__max__c1>=5;
+ batch | logical_rowcount | physical_rowcount 
+-------+------------------+-------------------
+     6 |                0 |                10
+(1 row)
+
+-- verify that aux index is truncated together with the table
+truncate :tname;
+insert into :tname
+  select i, i/10, i, i, i/2.0 from generate_series(0, 30000) i;
+-- verify the index was truncated by querying again:
+-- Hard to verify plan, since index name is dynamic generated, 
+-- if we explain the query, it will become a flacky test.
+-- verify the result
+select batch
+     , rowcount >> 32 as logical_rowcount
+     , rowcount % 4294967296 as physical_rowcount
+  from gp_dist_random(:aux_table_name_str)
+  where attr2__min__c1<=5 and attr2__max__c1>=5;
+ batch | logical_rowcount | physical_rowcount 
+-------+------------------+-------------------
+  3007 |                0 |                10
+(1 row)
+
+select c1, c4 from :tname where c1 = 10;
+ c1 |  c4  
+----+------
+ 10 |   50
+ 10 | 50.5
+ 10 |   51
+ 10 | 51.5
+ 10 |   52
+ 10 | 52.5
+ 10 |   53
+ 10 | 53.5
+ 10 |   54
+ 10 | 54.5
+(10 rows)
+
+select c1, c4 from :tname where c1 = 10 and c4 > 51.2;
+ c1 |  c4  
+----+------
+ 10 | 51.5
+ 10 |   52
+ 10 | 52.5
+ 10 |   53
+ 10 | 53.5
+ 10 |   54
+ 10 | 54.5
+(7 rows)
+
+select c1, c4 from :tname where c1 = 10 and c4 < 43;
+ c1 | c4 
+----+----
+(0 rows)
+
+select c1, c4 from :tname where 1 >= c1;
+ c1 | c4  
+----+-----
+  0 |   0
+  0 | 0.5
+  0 |   1
+  0 | 1.5
+  0 |   2
+  0 | 2.5
+  0 |   3
+  0 | 3.5
+  0 |   4
+  0 | 4.5
+  1 |   5
+  1 | 5.5
+  1 |   6
+  1 | 6.5
+  1 |   7
+  1 | 7.5
+  1 |   8
+  1 | 8.5
+  1 |   9
+  1 | 9.5
+(20 rows)
+
+select c1, c4 from :tname where 1 >= c1 and c4 > 8;
+ c1 | c4  
+----+-----
+  1 | 8.5
+  1 |   9
+  1 | 9.5
+(3 rows)
+
+select c1, c4 from :tname where 100 < c1 and c4 < 515;
+ c1  |  c4   
+-----+-------
+ 101 |   505
+ 101 | 505.5
+ 101 |   506
+ 101 | 506.5
+ 101 |   507
+ 101 | 507.5
+ 101 |   508
+ 101 | 508.5
+ 101 |   509
+ 101 | 509.5
+ 102 |   510
+ 102 | 510.5
+ 102 |   511
+ 102 | 511.5
+ 102 |   512
+ 102 | 512.5
+ 102 |   513
+ 102 | 513.5
+ 102 |   514
+ 102 | 514.5
+(20 rows)
+
+set enable_seqscan to on;
+set enable_bitmapscan to on;
+set enable_indexonlyscan to on;
+-- verify index on group keys
+-- a) group key only
+drop table if exists :tname;
+create table :tname (col1 int, tag int, col2 float, ts timestamp, col3 int) using mars
+with(group_col_ = "{tag}", group_param_col_ = "{ts in 1 min}") distributed by(tag);
+\i sql/auxtable_groupkey.template
+\out /dev/null
+select segrelid as aux_table_oid
+     , segrelid::regclass::name as aux_table_name
+  from mx_mars
+ where relid = :tnamestr::regclass;
+\out
+\gset
+\set aux_table_name_str '''' :aux_table_name ''''
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_table_oid and attnum >= 12;
+ attnum |          attname           |          atttypid           
+--------+----------------------------+-----------------------------
+     12 | physical_edges             | bytea
+     13 | attr2__group_key__tag      | integer
+     14 | attr4__group_param_key__ts | timestamp without time zone
+(3 rows)
+
+insert into :tname
+  select i, i/8, i/2.0, '2021-07-15 05:13:20'::timestamp + 15 * (i%8) * interval '1 second', i from generate_series(0, 15) i;
+select count(*)
+  from pg_index where indrelid = :aux_table_oid;
+ count 
+-------
+     3
+(1 row)
+
+\i sql/auxtable_group_index.template
+\out /dev/null
+select aux_index.aux_index_oid, aux_index.aux_index_name
+  from(
+    select indexrelid as aux_index_oid,
+           indexrelid::regclass::name as aux_index_name
+      from pg_index where indrelid = :aux_table_oid
+  ) as aux_index where aux_index.aux_index_name like '%idx3%';
+\out
+\gset
+\set aux_index_name_str '''' :aux_index_name ''''
+-- verify the index keys
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_index_oid;
+ attnum |          attname           |          atttypid           
+--------+----------------------------+-----------------------------
+      1 | attr2__group_key__tag      | integer
+      2 | attr4__group_param_key__ts | timestamp without time zone
+(2 rows)
+
+\i sql/auxtable_group_param_index.template
+\out /dev/null
+select aux_index.aux_index_oid, aux_index.aux_index_name
+  from(
+    select indexrelid as aux_index_oid,
+           indexrelid::regclass::name as aux_index_name
+      from pg_index where indrelid = :aux_table_oid
+  ) as aux_index where aux_index.aux_index_name like '%idx4%';
+\out
+\gset
+\set aux_index_name_str '''' :aux_index_name ''''
+-- verify the index keys
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_index_oid;
+ attnum |          attname           |          atttypid           
+--------+----------------------------+-----------------------------
+      1 | attr4__group_param_key__ts | timestamp without time zone
+      2 | attr2__group_key__tag      | integer
+(2 rows)
+
+select attr2__group_key__tag, attr4__group_param_key__ts
+  from gp_dist_random(:aux_table_name_str);
+ attr2__group_key__tag | attr4__group_param_key__ts 
+-----------------------+----------------------------
+                     0 | 2021-07-15 05:13:00
+                     0 | 2021-07-15 05:14:00
+                     0 | 2021-07-15 05:15:00
+                     1 | 2021-07-15 05:13:00
+                     1 | 2021-07-15 05:14:00
+                     1 | 2021-07-15 05:15:00
+(6 rows)
+
+\i sql/auxtable_groupkey_query.template
+select ctid, * from :tname;
+ ctid  | col1 | tag | col2 |         ts          | col3 
+-------+------+-----+------+---------------------+------
+ (1,1) |    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+ (1,2) |    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+ (1,3) |    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+ (2,1) |    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+ (2,2) |    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+ (2,3) |    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+ (2,4) |    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+ (3,1) |    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+ (4,1) |    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+ (4,2) |    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+ (4,3) |   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+ (5,1) |   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+ (5,2) |   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+ (5,3) |   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+ (5,4) |   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+ (6,1) |   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where tag > 1;
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag >= 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where tag = 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where tag <= 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where tag < 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(8 rows)
+
+select * from :tname
+ where ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(6 rows)
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20'::timestamp;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20'::timestamptz;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(10 rows)
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20'::timestamp;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20'::timestamptz;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where tag > 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag >= 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(3 rows)
+
+select * from :tname
+ where tag >= 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(4 rows)
+
+select * from :tname
+ where tag >= 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(1 row)
+
+select * from :tname
+ where tag >= 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(5 rows)
+
+select * from :tname
+ where tag >= 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(4 rows)
+
+select * from :tname
+ where tag = 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(3 rows)
+
+select * from :tname
+ where tag = 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(4 rows)
+
+select * from :tname
+ where tag = 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(1 row)
+
+select * from :tname
+ where tag = 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(5 rows)
+
+select * from :tname
+ where tag = 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(4 rows)
+
+select * from :tname
+ where tag <= 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(6 rows)
+
+select * from :tname
+ where tag <= 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where tag <= 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where tag <= 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(10 rows)
+
+select * from :tname
+ where tag <= 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where tag < 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(3 rows)
+
+select * from :tname
+ where tag < 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(4 rows)
+
+select * from :tname
+ where tag < 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+(1 row)
+
+select * from :tname
+ where tag < 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+(5 rows)
+
+select * from :tname
+ where tag < 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+(4 rows)
+
+select * from :tname order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where tag <= 1 order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where ts = '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where tag > 1 and ts >= '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag >= 1 and ts > '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(3 rows)
+
+select * from :tname
+ where tag >= 1 and ts < '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(4 rows)
+
+select * from :tname
+ where tag = 1 and ts <= '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(5 rows)
+
+select * from :tname
+ where tag <= 1 and ts = '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where tag < 1 and ts >= '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(4 rows)
+
+select time_bucket('30 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:13:00
+ 2021-07-15 05:13:30
+ 2021-07-15 05:14:00
+ 2021-07-15 05:14:30
+(4 rows)
+
+select time_bucket('60 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:13:00
+ 2021-07-15 05:14:00
+(2 rows)
+
+select time_bucket('120 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:12:00
+ 2021-07-15 05:14:00
+(2 rows)
+
+select time_bucket('180 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:12:00
+(1 row)
+
+-- b) # order key = 1
+drop table if exists :tname;
+create table :tname (col1 int, tag int, col2 float, ts timestamp, col3 int) using mars
+with(group_col_ = "{tag}", group_param_col_ = "{ts in 1 min}", global_order_col_ = "{tag}") distributed by(tag);
+\i sql/auxtable_groupkey.template
+\out /dev/null
+select segrelid as aux_table_oid
+     , segrelid::regclass::name as aux_table_name
+  from mx_mars
+ where relid = :tnamestr::regclass;
+\out
+\gset
+\set aux_table_name_str '''' :aux_table_name ''''
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_table_oid and attnum >= 12;
+ attnum |          attname           |          atttypid           
+--------+----------------------------+-----------------------------
+     12 | physical_edges             | bytea
+     13 | attr2__min__tag            | integer
+     14 | attr2__max__tag            | integer
+     15 | attr2__group_key__tag      | integer
+     16 | attr4__group_param_key__ts | timestamp without time zone
+(5 rows)
+
+insert into :tname
+  select i, i/8, i/2.0, '2021-07-15 05:13:20'::timestamp + 15 * (i%8) * interval '1 second', i from generate_series(0, 15) i;
+select count(*)
+  from pg_index where indrelid = :aux_table_oid;
+ count 
+-------
+     5
+(1 row)
+
+\i sql/auxtable_group_param_index.template
+\out /dev/null
+select aux_index.aux_index_oid, aux_index.aux_index_name
+  from(
+    select indexrelid as aux_index_oid,
+           indexrelid::regclass::name as aux_index_name
+      from pg_index where indrelid = :aux_table_oid
+  ) as aux_index where aux_index.aux_index_name like '%idx4%';
+\out
+\gset
+\set aux_index_name_str '''' :aux_index_name ''''
+-- verify the index keys
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_index_oid;
+ attnum |          attname           |          atttypid           
+--------+----------------------------+-----------------------------
+      1 | attr4__group_param_key__ts | timestamp without time zone
+      2 | attr2__group_key__tag      | integer
+(2 rows)
+
+select attr4__group_param_key__ts
+  from gp_dist_random(:aux_table_name_str);
+ attr4__group_param_key__ts 
+----------------------------
+ 2021-07-15 05:13:00
+ 2021-07-15 05:14:00
+ 2021-07-15 05:15:00
+ 2021-07-15 05:13:00
+ 2021-07-15 05:14:00
+ 2021-07-15 05:15:00
+(6 rows)
+
+\i sql/auxtable_groupkey_query.template
+select ctid, * from :tname;
+ ctid  | col1 | tag | col2 |         ts          | col3 
+-------+------+-----+------+---------------------+------
+ (1,1) |    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+ (1,2) |    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+ (1,3) |    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+ (2,1) |    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+ (2,2) |    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+ (2,3) |    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+ (2,4) |    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+ (3,1) |    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+ (4,1) |    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+ (4,2) |    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+ (4,3) |   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+ (5,1) |   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+ (5,2) |   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+ (5,3) |   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+ (5,4) |   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+ (6,1) |   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where tag > 1;
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag >= 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where tag = 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where tag <= 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where tag < 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(8 rows)
+
+select * from :tname
+ where ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(6 rows)
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20'::timestamp;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20'::timestamptz;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(10 rows)
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20'::timestamp;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20'::timestamptz;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where tag > 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag >= 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(3 rows)
+
+select * from :tname
+ where tag >= 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(4 rows)
+
+select * from :tname
+ where tag >= 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(1 row)
+
+select * from :tname
+ where tag >= 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(5 rows)
+
+select * from :tname
+ where tag >= 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(4 rows)
+
+select * from :tname
+ where tag = 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(3 rows)
+
+select * from :tname
+ where tag = 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(4 rows)
+
+select * from :tname
+ where tag = 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(1 row)
+
+select * from :tname
+ where tag = 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(5 rows)
+
+select * from :tname
+ where tag = 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(4 rows)
+
+select * from :tname
+ where tag <= 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(6 rows)
+
+select * from :tname
+ where tag <= 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where tag <= 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where tag <= 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(10 rows)
+
+select * from :tname
+ where tag <= 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where tag < 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(3 rows)
+
+select * from :tname
+ where tag < 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(4 rows)
+
+select * from :tname
+ where tag < 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+(1 row)
+
+select * from :tname
+ where tag < 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+(5 rows)
+
+select * from :tname
+ where tag < 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+(4 rows)
+
+select * from :tname order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where tag <= 1 order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where ts = '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where tag > 1 and ts >= '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag >= 1 and ts > '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(3 rows)
+
+select * from :tname
+ where tag >= 1 and ts < '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(4 rows)
+
+select * from :tname
+ where tag = 1 and ts <= '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(5 rows)
+
+select * from :tname
+ where tag <= 1 and ts = '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where tag < 1 and ts >= '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(4 rows)
+
+select time_bucket('30 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:13:00
+ 2021-07-15 05:13:30
+ 2021-07-15 05:14:00
+ 2021-07-15 05:14:30
+(4 rows)
+
+select time_bucket('60 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:13:00
+ 2021-07-15 05:14:00
+(2 rows)
+
+select time_bucket('120 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:12:00
+ 2021-07-15 05:14:00
+(2 rows)
+
+select time_bucket('180 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:12:00
+(1 row)
+
+-- c) # order key = 2
+drop table if exists :tname;
+create table :tname (col1 int, tag int, col2 float, ts timestamp, col3 int) using mars
+with(group_col_ = "{tag}", group_param_col_ = "{ts in 1 min}", global_order_col_ = "{tag, ts}") distributed by(tag);
+\i sql/auxtable_groupkey.template
+\out /dev/null
+select segrelid as aux_table_oid
+     , segrelid::regclass::name as aux_table_name
+  from mx_mars
+ where relid = :tnamestr::regclass;
+\out
+\gset
+\set aux_table_name_str '''' :aux_table_name ''''
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_table_oid and attnum >= 12;
+ attnum |          attname           |          atttypid           
+--------+----------------------------+-----------------------------
+     12 | physical_edges             | bytea
+     13 | attr2__min__tag            | integer
+     14 | attr2__max__tag            | integer
+     15 | attr4__min__ts             | timestamp without time zone
+     16 | attr4__max__ts             | timestamp without time zone
+     17 | attr2__group_key__tag      | integer
+     18 | attr4__group_param_key__ts | timestamp without time zone
+(7 rows)
+
+insert into :tname
+  select i, i/8, i/2.0, '2021-07-15 05:13:20'::timestamp + 15 * (i%8) * interval '1 second', i from generate_series(0, 15) i;
+select count(*)
+  from pg_index where indrelid = :aux_table_oid;
+ count 
+-------
+     5
+(1 row)
+
+\i sql/auxtable_group_param_index.template
+\out /dev/null
+select aux_index.aux_index_oid, aux_index.aux_index_name
+  from(
+    select indexrelid as aux_index_oid,
+           indexrelid::regclass::name as aux_index_name
+      from pg_index where indrelid = :aux_table_oid
+  ) as aux_index where aux_index.aux_index_name like '%idx4%';
+\out
+\gset
+\set aux_index_name_str '''' :aux_index_name ''''
+-- verify the index keys
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_index_oid;
+ attnum |          attname           |          atttypid           
+--------+----------------------------+-----------------------------
+      1 | attr4__group_param_key__ts | timestamp without time zone
+      2 | attr2__group_key__tag      | integer
+(2 rows)
+
+select attr4__group_param_key__ts
+  from gp_dist_random(:aux_table_name_str);
+ attr4__group_param_key__ts 
+----------------------------
+ 2021-07-15 05:13:00
+ 2021-07-15 05:14:00
+ 2021-07-15 05:15:00
+ 2021-07-15 05:13:00
+ 2021-07-15 05:14:00
+ 2021-07-15 05:15:00
+(6 rows)
+
+\i sql/auxtable_groupkey_query.template
+select ctid, * from :tname;
+ ctid  | col1 | tag | col2 |         ts          | col3 
+-------+------+-----+------+---------------------+------
+ (1,1) |    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+ (1,2) |    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+ (1,3) |    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+ (2,1) |    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+ (2,2) |    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+ (2,3) |    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+ (2,4) |    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+ (3,1) |    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+ (4,1) |    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+ (4,2) |    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+ (4,3) |   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+ (5,1) |   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+ (5,2) |   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+ (5,3) |   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+ (5,4) |   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+ (6,1) |   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where tag > 1;
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag >= 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where tag = 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where tag <= 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where tag < 1;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(8 rows)
+
+select * from :tname
+ where ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(6 rows)
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20'::timestamp;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where ts >= '2021-07-15 05:14:20'::timestamptz;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(10 rows)
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20'::timestamp;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where ts < '2021-07-15 05:14:20'::timestamptz;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where tag > 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag > 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag >= 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(3 rows)
+
+select * from :tname
+ where tag >= 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(4 rows)
+
+select * from :tname
+ where tag >= 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(1 row)
+
+select * from :tname
+ where tag >= 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(5 rows)
+
+select * from :tname
+ where tag >= 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(4 rows)
+
+select * from :tname
+ where tag = 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(3 rows)
+
+select * from :tname
+ where tag = 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(4 rows)
+
+select * from :tname
+ where tag = 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(1 row)
+
+select * from :tname
+ where tag = 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(5 rows)
+
+select * from :tname
+ where tag = 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(4 rows)
+
+select * from :tname
+ where tag <= 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(6 rows)
+
+select * from :tname
+ where tag <= 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(8 rows)
+
+select * from :tname
+ where tag <= 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where tag <= 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(10 rows)
+
+select * from :tname
+ where tag <= 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(8 rows)
+
+select * from :tname
+ where tag < 1 and ts > '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(3 rows)
+
+select * from :tname
+ where tag < 1 and ts >= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(4 rows)
+
+select * from :tname
+ where tag < 1 and ts = '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+(1 row)
+
+select * from :tname
+ where tag < 1 and ts <= '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+(5 rows)
+
+select * from :tname
+ where tag < 1 and ts < '2021-07-15 05:14:20';
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+(4 rows)
+
+select * from :tname order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where tag <= 1 order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    0 |   0 |    0 | 2021-07-15 05:13:20 |    0
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    1 |   0 |  0.5 | 2021-07-15 05:13:35 |    1
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+    2 |   0 |    1 | 2021-07-15 05:13:50 |    2
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+    3 |   0 |  1.5 | 2021-07-15 05:14:05 |    3
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(16 rows)
+
+select * from :tname
+ where ts = '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where tag > 1 and ts >= '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 | ts | col3 
+------+-----+------+----+------
+(0 rows)
+
+select * from :tname
+ where tag >= 1 and ts > '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+   13 |   1 |  6.5 | 2021-07-15 05:14:35 |   13
+   14 |   1 |    7 | 2021-07-15 05:14:50 |   14
+   15 |   1 |  7.5 | 2021-07-15 05:15:05 |   15
+(3 rows)
+
+select * from :tname
+ where tag >= 1 and ts < '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+(4 rows)
+
+select * from :tname
+ where tag = 1 and ts <= '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    8 |   1 |    4 | 2021-07-15 05:13:20 |    8
+    9 |   1 |  4.5 | 2021-07-15 05:13:35 |    9
+   10 |   1 |    5 | 2021-07-15 05:13:50 |   10
+   11 |   1 |  5.5 | 2021-07-15 05:14:05 |   11
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(5 rows)
+
+select * from :tname
+ where tag <= 1 and ts = '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+   12 |   1 |    6 | 2021-07-15 05:14:20 |   12
+(2 rows)
+
+select * from :tname
+ where tag < 1 and ts >= '2021-07-15 05:14:20' order by ts;
+ col1 | tag | col2 |         ts          | col3 
+------+-----+------+---------------------+------
+    4 |   0 |    2 | 2021-07-15 05:14:20 |    4
+    5 |   0 |  2.5 | 2021-07-15 05:14:35 |    5
+    6 |   0 |    3 | 2021-07-15 05:14:50 |    6
+    7 |   0 |  3.5 | 2021-07-15 05:15:05 |    7
+(4 rows)
+
+select time_bucket('30 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:13:00
+ 2021-07-15 05:13:30
+ 2021-07-15 05:14:00
+ 2021-07-15 05:14:30
+(4 rows)
+
+select time_bucket('60 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:13:00
+ 2021-07-15 05:14:00
+(2 rows)
+
+select time_bucket('120 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:12:00
+ 2021-07-15 05:14:00
+(2 rows)
+
+select time_bucket('180 seconds', ts) as min
+  from :tname
+ where tag in ( 0, 1 )
+   and ts >= '2021-07-15 05:13:00'
+   and ts <  '2021-07-15 05:14:50'
+ group by min
+ order by min
+;
+         min         
+---------------------
+ 2021-07-15 05:12:00
+(1 row)
+
+-- verify it works as expected when column name is long enough
+drop table if exists :tname;
+create table :tname (col1 int, 我是一个很长很长的名字差不多会也许会可能 int,
+  col2 float, 我是一个很长很长的名字差不多会也许 timestamp, col3 int) using mars
+with(group_col_ = "{我是一个很长很长的名字差不多会也许会可能}",
+  group_param_col_ = "{我是一个很长很长的名字差不多会也许 in 1 min}")
+  distributed by(col1);
+\i sql/auxtable_groupkey.template
+\out /dev/null
+select segrelid as aux_table_oid
+     , segrelid::regclass::name as aux_table_name
+  from mx_mars
+ where relid = :tnamestr::regclass;
+\out
+\gset
+\set aux_table_name_str '''' :aux_table_name ''''
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_table_oid and attnum >= 12;
+ attnum |                      attname                       |          atttypid           
+--------+----------------------------------------------------+-----------------------------
+     12 | physical_edges                                     | bytea
+     13 | attr2__group_key__我是一个很长很长的名字差不多会   | integer
+     14 | attr4__group_param_key__我是一个很长很长的名字差不 | timestamp without time zone
+(3 rows)
+
+insert into :tname
+  select i, i/8, i/2.0, '2021-07-15 05:13:20'::timestamp + 15 * (i%8) * interval '1 second', i from generate_series(0, 15) i;
+select count(*)
+  from pg_index where indrelid = :aux_table_oid;
+ count 
+-------
+     3
+(1 row)
+
+\i sql/auxtable_group_index.template
+\out /dev/null
+select aux_index.aux_index_oid, aux_index.aux_index_name
+  from(
+    select indexrelid as aux_index_oid,
+           indexrelid::regclass::name as aux_index_name
+      from pg_index where indrelid = :aux_table_oid
+  ) as aux_index where aux_index.aux_index_name like '%idx3%';
+\out
+\gset
+\set aux_index_name_str '''' :aux_index_name ''''
+-- verify the index keys
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_index_oid;
+ attnum |                      attname                       |          atttypid           
+--------+----------------------------------------------------+-----------------------------
+      1 | attr2__group_key__我是一个很长很长的名字差不多会   | integer
+      2 | attr4__group_param_key__我是一个很长很长的名字差不 | timestamp without time zone
+(2 rows)
+
+\i sql/auxtable_group_param_index.template
+\out /dev/null
+select aux_index.aux_index_oid, aux_index.aux_index_name
+  from(
+    select indexrelid as aux_index_oid,
+           indexrelid::regclass::name as aux_index_name
+      from pg_index where indrelid = :aux_table_oid
+  ) as aux_index where aux_index.aux_index_name like '%idx4%';
+\out
+\gset
+\set aux_index_name_str '''' :aux_index_name ''''
+-- verify the index keys
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_index_oid;
+ attnum |                      attname                       |          atttypid           
+--------+----------------------------------------------------+-----------------------------
+      1 | attr4__group_param_key__我是一个很长很长的名字差不 | timestamp without time zone
+      2 | attr2__group_key__我是一个很长很长的名字差不多会   | integer
+(2 rows)
+
+select * from :tname
+ where 我是一个很长很长的名字差不多会也许会可能 > 0;
+ col1 | 我是一个很长很长的名字差不多会也许会可能 | col2 | 我是一个很长很长的名字差不多会也许 | col3 
+------+------------------------------------------+------+------------------------------------+------
+    8 |                                        1 |    4 | 2021-07-15 05:13:20                |    8
+    9 |                                        1 |  4.5 | 2021-07-15 05:13:35                |    9
+   10 |                                        1 |    5 | 2021-07-15 05:13:50                |   10
+   11 |                                        1 |  5.5 | 2021-07-15 05:14:05                |   11
+   12 |                                        1 |    6 | 2021-07-15 05:14:20                |   12
+   13 |                                        1 |  6.5 | 2021-07-15 05:14:35                |   13
+   14 |                                        1 |    7 | 2021-07-15 05:14:50                |   14
+   15 |                                        1 |  7.5 | 2021-07-15 05:15:05                |   15
+(8 rows)
+
+select * from :tname
+ where 我是一个很长很长的名字差不多会也许 > '2021-07-15 05:14:20';
+ col1 | 我是一个很长很长的名字差不多会也许会可能 | col2 | 我是一个很长很长的名字差不多会也许 | col3 
+------+------------------------------------------+------+------------------------------------+------
+    5 |                                        0 |  2.5 | 2021-07-15 05:14:35                |    5
+    6 |                                        0 |    3 | 2021-07-15 05:14:50                |    6
+   13 |                                        1 |  6.5 | 2021-07-15 05:14:35                |   13
+   14 |                                        1 |    7 | 2021-07-15 05:14:50                |   14
+    7 |                                        0 |  3.5 | 2021-07-15 05:15:05                |    7
+   15 |                                        1 |  7.5 | 2021-07-15 05:15:05                |   15
+(6 rows)
+
+select * from :tname
+ where 我是一个很长很长的名字差不多会也许 <= '2021-07-15 05:14:20'
+  and 我是一个很长很长的名字差不多会也许会可能 = 0;
+ col1 | 我是一个很长很长的名字差不多会也许会可能 | col2 | 我是一个很长很长的名字差不多会也许 | col3 
+------+------------------------------------------+------+------------------------------------+------
+    0 |                                        0 |    0 | 2021-07-15 05:13:20                |    0
+    1 |                                        0 |  0.5 | 2021-07-15 05:13:35                |    1
+    2 |                                        0 |    1 | 2021-07-15 05:13:50                |    2
+    3 |                                        0 |  1.5 | 2021-07-15 05:14:05                |    3
+    4 |                                        0 |    2 | 2021-07-15 05:14:20                |    4
+(5 rows)
+
+select attr2__group_key__我是一个很长很长的名字差不多会, attr4__group_param_key__我是一个很长很长的名字差不
+  from gp_dist_random(:aux_table_name_str);
+ attr2__group_key__我是一个很长很长的名字差不多会 | attr4__group_param_key__我是一个很长很长的名字差不 
+--------------------------------------------------+----------------------------------------------------
+                                                0 | 2021-07-15 05:13:00
+                                                0 | 2021-07-15 05:14:00
+                                                0 | 2021-07-15 05:15:00
+                                                1 | 2021-07-15 05:13:00
+                                                1 | 2021-07-15 05:14:00
+                                                1 | 2021-07-15 05:15:00
+(6 rows)
+
+drop table if exists :tname;
+create table :tname (col1 int, a我是一个很长很长的名字差不多会也许会可能 int,
+  col2 float, a我是一个很长很长的名字差不多会也许 timestamp, col3 int) using mars
+with(group_col_ = "{a我是一个很长很长的名字差不多会也许会可能}",
+  group_param_col_ = "{a我是一个很长很长的名字差不多会也许 in 1 min}")
+  distributed by(col1);
+\i sql/auxtable_groupkey.template
+\out /dev/null
+select segrelid as aux_table_oid
+     , segrelid::regclass::name as aux_table_name
+  from mx_mars
+ where relid = :tnamestr::regclass;
+\out
+\gset
+\set aux_table_name_str '''' :aux_table_name ''''
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_table_oid and attnum >= 12;
+ attnum |                      attname                      |          atttypid           
+--------+---------------------------------------------------+-----------------------------
+     12 | physical_edges                                    | bytea
+     13 | attr2__group_key__a我是一个很长很长的名字差不多   | integer
+     14 | attr4__group_param_key__a我是一个很长很长的名字差 | timestamp without time zone
+(3 rows)
+
+insert into :tname
+  select i, i/8, i/2.0, '2021-07-15 05:13:20'::timestamp + 15 * (i%8) * interval '1 second', i from generate_series(0, 15) i;
+select count(*)
+  from pg_index where indrelid = :aux_table_oid;
+ count 
+-------
+     3
+(1 row)
+
+\i sql/auxtable_group_index.template
+\out /dev/null
+select aux_index.aux_index_oid, aux_index.aux_index_name
+  from(
+    select indexrelid as aux_index_oid,
+           indexrelid::regclass::name as aux_index_name
+      from pg_index where indrelid = :aux_table_oid
+  ) as aux_index where aux_index.aux_index_name like '%idx3%';
+\out
+\gset
+\set aux_index_name_str '''' :aux_index_name ''''
+-- verify the index keys
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_index_oid;
+ attnum |                      attname                      |          atttypid           
+--------+---------------------------------------------------+-----------------------------
+      1 | attr2__group_key__a我是一个很长很长的名字差不多   | integer
+      2 | attr4__group_param_key__a我是一个很长很长的名字差 | timestamp without time zone
+(2 rows)
+
+\i sql/auxtable_group_param_index.template
+\out /dev/null
+select aux_index.aux_index_oid, aux_index.aux_index_name
+  from(
+    select indexrelid as aux_index_oid,
+           indexrelid::regclass::name as aux_index_name
+      from pg_index where indrelid = :aux_table_oid
+  ) as aux_index where aux_index.aux_index_name like '%idx4%';
+\out
+\gset
+\set aux_index_name_str '''' :aux_index_name ''''
+-- verify the index keys
+select attnum, attname, atttypid::regtype::name from pg_attribute
+  where attrelid = :aux_index_oid;
+ attnum |                      attname                      |          atttypid           
+--------+---------------------------------------------------+-----------------------------
+      1 | attr4__group_param_key__a我是一个很长很长的名字差 | timestamp without time zone
+      2 | attr2__group_key__a我是一个很长很长的名字差不多   | integer
+(2 rows)
+
+select * from :tname
+ where a我是一个很长很长的名字差不多会也许会可能 > 0;
+ col1 | a我是一个很长很长的名字差不多会也许会可能 | col2 | a我是一个很长很长的名字差不多会也许 | col3 
+------+-------------------------------------------+------+-------------------------------------+------
+    8 |                                         1 |    4 | 2021-07-15 05:13:20                 |    8
+    9 |                                         1 |  4.5 | 2021-07-15 05:13:35                 |    9
+   10 |                                         1 |    5 | 2021-07-15 05:13:50                 |   10
+   11 |                                         1 |  5.5 | 2021-07-15 05:14:05                 |   11
+   12 |                                         1 |    6 | 2021-07-15 05:14:20                 |   12
+   13 |                                         1 |  6.5 | 2021-07-15 05:14:35                 |   13
+   14 |                                         1 |    7 | 2021-07-15 05:14:50                 |   14
+   15 |                                         1 |  7.5 | 2021-07-15 05:15:05                 |   15
+(8 rows)
+
+select * from :tname
+ where a我是一个很长很长的名字差不多会也许 > '2021-07-15 05:14:20';
+ col1 | a我是一个很长很长的名字差不多会也许会可能 | col2 | a我是一个很长很长的名字差不多会也许 | col3 
+------+-------------------------------------------+------+-------------------------------------+------
+    5 |                                         0 |  2.5 | 2021-07-15 05:14:35                 |    5
+    6 |                                         0 |    3 | 2021-07-15 05:14:50                 |    6
+   13 |                                         1 |  6.5 | 2021-07-15 05:14:35                 |   13
+   14 |                                         1 |    7 | 2021-07-15 05:14:50                 |   14
+    7 |                                         0 |  3.5 | 2021-07-15 05:15:05                 |    7
+   15 |                                         1 |  7.5 | 2021-07-15 05:15:05                 |   15
+(6 rows)
+
+select * from :tname
+ where a我是一个很长很长的名字差不多会也许 <= '2021-07-15 05:14:20'
+  and a我是一个很长很长的名字差不多会也许会可能 = 0;
+ col1 | a我是一个很长很长的名字差不多会也许会可能 | col2 | a我是一个很长很长的名字差不多会也许 | col3 
+------+-------------------------------------------+------+-------------------------------------+------
+    0 |                                         0 |    0 | 2021-07-15 05:13:20                 |    0
+    1 |                                         0 |  0.5 | 2021-07-15 05:13:35                 |    1
+    2 |                                         0 |    1 | 2021-07-15 05:13:50                 |    2
+    3 |                                         0 |  1.5 | 2021-07-15 05:14:05                 |    3
+    4 |                                         0 |    2 | 2021-07-15 05:14:20                 |    4
+(5 rows)
+
+select attr2__group_key__a我是一个很长很长的名字差不多, attr4__group_param_key__a我是一个很长很长的名字差
+  from gp_dist_random(:aux_table_name_str);
+ attr2__group_key__a我是一个很长很长的名字差不多 | attr4__group_param_key__a我是一个很长很长的名字差 
+-------------------------------------------------+---------------------------------------------------
+                                               0 | 2021-07-15 05:13:00
+                                               0 | 2021-07-15 05:14:00
+                                               0 | 2021-07-15 05:15:00
+                                               1 | 2021-07-15 05:13:00
+                                               1 | 2021-07-15 05:14:00
+                                               1 | 2021-07-15 05:15:00
+(6 rows)
+

@@ -1,0 +1,4 @@
+MarsRowGroupSerializer.o: MarsRowGroupSerializer.cc \
+ MarsRowGroupSerializer.h
+
+MarsRowGroupSerializer.h:

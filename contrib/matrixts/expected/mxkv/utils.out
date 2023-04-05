@@ -1,0 +1,73 @@
+--
+-- pg_dump should be able to dump mxkv columns as well as the registered key.
+--
+\set tname test_mxkv_utils_t1
+drop table if exists :tname;
+NOTICE:  table "test_mxkv_utils_t1" does not exist, skipping
+create table :tname (tag int, kv mxkv_text) distributed by (tag);
+insert into :tname
+values (10, '{}')
+     , (11, '{    }')
+     , (20, '{"k1": 1, "k2": -2, "k3": null}')
+     -- below keys with special characters are imported in mxkv/syntax.sql
+     , (30, '{ "a\"b''c{}() .,:d\\e\u0001f\r\n\tg": 1 }')
+     , (31, '{ "a\"b''c{}() .,:d\\e\u0002f\r\n\tg": 1 }')
+;
+-- generate a dump
+\! pg_dump -d contrib_regression -t test_mxkv_utils_t1 -F p -f /tmp/test_mxkv_utils_dump.sql;
+-- verify that the dump can be loaded back to the original db
+drop table :tname;
+\i /tmp/test_mxkv_utils_dump.sql;
+--
+-- Greenplum Database database dump
+--
+-- Dumped from database version 12
+-- Dumped by pg_dump version 12
+SET gp_default_storage_options = '';
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+ set_config 
+------------
+ 
+(1 row)
+
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+SET default_tablespace = '';
+SET default_table_access_method = heap;
+--
+-- Name: test_mxkv_utils_t1; Type: TABLE; Schema: public; Owner: u
+--
+CREATE TABLE public.test_mxkv_utils_t1 (
+    tag integer,
+    kv public.mxkv_text
+) DISTRIBUTED BY (tag);
+ALTER TABLE public.test_mxkv_utils_t1 OWNER TO u;
+--
+-- Data for Name: test_mxkv_utils_t1; Type: TABLE DATA; Schema: public; Owner: u
+--
+COPY public.test_mxkv_utils_t1 (tag, kv) FROM stdin;
+--
+-- Greenplum Database database dump complete
+--
+-- some settings are modified by loading the dump, such as search_path, so we
+-- reconnect to reset the settings.
+\c
+select * from :tname order by tag;
+ tag |                    kv                     
+-----+-------------------------------------------
+  10 | {}
+  11 | {}
+  20 | {"k1": "1", "k2": "-2"}
+  30 | {"a\"b'c{}() .,:d\\e\u0001f\r\n\tg": "1"}
+  31 | {"a\"b'c{}() .,:d\\e\u0002f\r\n\tg": "1"}
+(5 rows)
+
+-- todo: verify that the dump can be loaded in a new db
+-- vi: et :

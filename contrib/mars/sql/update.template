@@ -1,0 +1,119 @@
+create table :tname
+     ( c1 int
+     , c2 int
+     , c3 int
+     , c4 int
+     , seg int default 0
+     )
+ using mars
+ :withopts
+ distributed by (seg)
+;
+
+-- the first batch
+insert into :tname
+select i / 2 as c1
+     , i % 2 as c2
+     , i / 2 as c3
+     , i % 2 as c4
+  from generate_series(0, 3) i
+;
+
+-- verify the blocks
+select ctid, c1, c2, c3, c4 from :tname;
+
+--
+-- 1. update a no-such-row, nothing should happen
+--
+
+begin;
+    update :tname set c3 = 999 where c4 = -1;
+    update :tname set c3 = 999 where c4 = -2;
+    select ctid, c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+abort;
+
+--
+-- 2. update a single row
+--
+
+begin;
+    -- 2.1. the first row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+
+    -- 2.2. the old row cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 0 and c4 = 0;
+    select ctid from :tname;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+
+    -- 2.3. the new row can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c3 = 800 and c4 >= 900;
+    select ctid from :tname;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+abort;
+
+--
+-- 3. update multiple rows
+--
+
+begin;
+    -- 3.1. the first batch of row
+    update :tname set c3 = c3 + 800, c4 = c4 + 900 where c4 = 0;
+    select ctid from :tname;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+
+    -- 3.2. the old batch cannot be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 = 0;
+    select ctid from :tname;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+
+    -- 3.3. the new batch can be updated again
+    update :tname set c3 = c3 - 300, c4 = c4 - 300 where c4 >= 900;
+    select ctid from :tname;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+abort;
+
+--
+-- 4. update to nulls, and update from nulls
+--
+
+begin;
+    -- 4.1. update some values to nulls
+    update :tname set c4 = null where c4 = 0;
+    select ctid from :tname;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+
+    -- 4.2. update some values from nulls
+    update :tname set c4 = c2 where c4 is null;
+    select ctid from :tname;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+abort;
+
+--
+-- 99. update the groupkeys is not allowed, below might fail if that is the
+-- case.
+--
+-- note: this group of tests should always be the last, ctids are not checked.
+--
+
+begin;
+    -- 99.1. the update on a group key is allowed as long as the new value
+    -- stays in the same block with the old one.
+    update :tname set c1 = c3, c2 = c4;
+    select c1, c2, c3, c4 from :tname order by c1, c2, c3, c4;
+abort;
+
+begin;
+    -- 99.2. should fail if c1 is the group key
+    update :tname set c1 = 999;
+    select c1 from :tname;
+abort;
+
+begin;
+    -- 99.3. should fail if c2 is the param group key
+    update :tname set c2 = 999;
+    select c2 from :tname;
+abort;
+
+-- vi: syntax=sql et :

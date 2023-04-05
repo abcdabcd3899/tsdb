@@ -1,0 +1,17 @@
+[Unit]
+Description=MatrixDB Supervisord Daemon
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/matrixdb-supervisor
+ExecStart=/bin/bash  -c 'exec "$MXHOME"/bin/supervisord -c "$CONF"'
+ExecStop=/bin/bash   -c 'exec "$MXHOME"/bin/supervisord -c "$CONF" ctl shutdown'
+ExecReload=/bin/bash -c 'exec "$MXHOME"/bin/supervisord -c "$CONF" ctl reload'
+KillMode=process
+Restart=on-failure
+TimeoutStartSec=0
+TimeoutStopSec=30s
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

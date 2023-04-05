@@ -1,0 +1,1 @@
+src/backend/access/bitmap/bitmaputil.o src/backend/access/bitmap/bitmapattutil.o src/backend/access/bitmap/bitmappages.o src/backend/access/bitmap/bitmapinsert.o src/backend/access/bitmap/bitmapsearch.o src/backend/access/bitmap/bitmap.o src/backend/access/bitmap/bitmapxlog.o

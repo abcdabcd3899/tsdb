@@ -1,0 +1,67 @@
+\set iname :tname '_idx'
+\set inamestr '''' :iname ''''
+
+create table :tname
+     ( c1 int
+     , c2 bigint
+     , c3 double precision
+     , c4 text
+     , c5 timestamp
+     , c6 date
+     )
+:topts
+distributed by (c1)
+:tparts
+;
+
+insert into :tname
+select i as c1
+     , i as c2
+     , i as c3
+     , i as c4
+     , '2000-01-01'::timestamp + i::text::interval as c5
+     , '2000-01-01'::date + (i || 'd')::interval as c6
+  from generate_series(:nrows - 1, 0, -1) i
+;
+
+insert into :tname
+values (null, 0, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, null, 0, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, null, 0, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, null, '2000-01-01', '2000-01-01')
+     , (0, 0, 0, 0, null, '2000-01-01')
+     , (0, 0, 0, 0, '2000-01-01', null)
+;
+
+create index :iname on :tname using :itype
+     ( c1
+     , c2 desc
+     , c3 asc nulls first
+     , c4 asc nulls last
+     , c5 desc nulls first
+     , c6 desc nulls last
+     )
+:iopts
+;
+
+select * from reorder_by_index(:inamestr);
+
+-- select with seqscan
+set enable_seqscan to on;
+set enable_indexscan to off;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+
+-- select with indexscan
+set enable_seqscan to off;
+set enable_indexscan to on;
+set enable_indexonlyscan to off;
+set enable_bitmapscan to off;
+select * from :tname order by true;
+
+-- reset the gucs
+reset enable_seqscan;
+reset enable_indexscan;
+reset enable_indexonlyscan;
+reset enable_bitmapscan;

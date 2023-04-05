@@ -1,0 +1,89 @@
+-- positive: with any of the 4 aggs
+
+explain (costs off)
+select first(c2, c1) from t1;
+select first(c2, c1) from t1;
+
+explain (costs off)
+select last(c2, c1) from t1;
+select last(c2, c1) from t1;
+
+explain (costs off)
+select min(c1) from t1;
+select min(c1) from t1;
+
+explain (costs off)
+select max(c1) from t1;
+select max(c1) from t1;
+
+-- positive: with combination of them
+
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+  from t1;
+
+select first(c2, c1)
+     , last(c2, c1)
+  from t1;
+
+explain (costs off)
+select min(c1)
+     , max(c1)
+  from t1;
+
+select min(c1)
+     , max(c1)
+  from t1;
+
+-- negative: a limitation, mixing first()/last() and min()/max() is unsupported
+
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+     , min(c1)
+     , max(c1)
+  from t1;
+
+select first(c2, c1)
+     , last(c2, c1)
+     , min(c1)
+     , max(c1)
+  from t1;
+
+-- positive: but we could simulate min()/max() with first()/last()
+
+explain (costs off)
+select first(c2, c1)
+     , last(c2, c1)
+     , first(c1, c1) as min
+     , last(c1, c1) as max
+  from t1;
+
+select first(c2, c1)
+     , last(c2, c1)
+     , first(c1, c1) as min
+     , last(c1, c1) as max
+  from t1;
+
+-- negative: mix with other aggs
+
+explain (costs off)
+select first(c2, c1)
+     , count(c1)
+  from t1;
+
+select first(c2, c1)
+     , count(c1)
+  from t1;
+
+-- negative: mix with the 4 aggs, but on non-order columns
+
+explain (costs off)
+select first(c2, c1)
+     , min(c2)
+  from t1;
+
+select first(c2, c1)
+     , min(c2)
+  from t1;

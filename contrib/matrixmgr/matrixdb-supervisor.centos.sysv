@@ -1,0 +1,140 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          matrixdb.supervisor
+# Required-Start:    $remote_fs $network $named
+# Required-Stop:     $remote_fs $network $named
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Start the Supervisor service for MatrixDB
+# Description:       Start the Supervisor service for MatrixDB
+### END INIT INFO
+
+# this is the position on centos7, however it is not available unless the
+# package initscripts is installed, in such a case silently give up
+test -e /etc/rc.d/init.d/functions || exit 0
+. /etc/rc.d/init.d/functions
+
+# include defaults, if it is missing, silently give up
+test -e /etc/default/matrixdb-supervisor || exit 0
+. /etc/default/matrixdb-supervisor
+
+NAME=matrixdb-supervisor
+DESC="MatrixDB Supervisor Service"
+PIDFILE=/var/run/matrixdb.supervisord.pid
+TIMEOUT=30
+
+DAEMON="$MXHOME"/bin/supervisord
+DAEMON_OPTS="--configuration=$CONF --daemon"
+
+test -x "$DAEMON" || exit 0
+
+is_running()
+{
+	local pid comm
+
+	if ! test -e "$PIDFILE"; then
+		# no pid file, suppose it is not running
+		return 1
+	fi
+
+	pid=$(cat "$PIDFILE")
+	if ! test -e /proc/$pid/comm; then
+		# invalid pid
+		return 1
+	fi
+
+	# also need to ensure that it is really supervisord
+	comm=$(cat /proc/$pid/comm)
+	test "$comm" = supervisord
+}
+
+is_stopped()
+{
+	! is_running
+}
+
+# wait until the given status func returns true
+wait_status()
+{
+	local func retry
+	func=$1
+	retry=$TIMEOUT
+
+	while ! $func && test $retry != 0; do
+		retry=$(expr $retry - 1)
+		sleep 1
+	done
+
+	test $retry != 0
+}
+
+start()
+{
+	"$DAEMON" $DAEMON_OPTS >/dev/null 2>&1
+
+	wait_status is_running
+}
+
+stop()
+{
+	local ret
+
+	"$DAEMON" ctl $DAEMON_OPTS shutdown >/dev/null 2>&1
+
+	wait_status is_stopped
+	ret=$?
+
+	if is_stopped; then
+		# remove the pidfile if it is really stopped
+		rm -f "$PIDFILE" || :
+	fi
+
+	return $ret
+}
+
+restart()
+{
+	stop
+	start
+}
+
+reload()
+{
+	"$DAEMON" ctl $DAEMON_OPTS reload >/dev/null 2>&1
+}
+
+case "$1" in
+	start)
+		if is_stopped; then
+			action "Starting $DESC: " start
+		fi
+		;;
+
+	stop|force-stop)
+		if is_running; then
+			action "Stopping $DESC: " stop
+		fi
+		;;
+
+	reload|force-reload)
+		if is_running; then
+			action "Reloading $DESC: " reload
+		fi
+		;;
+
+	restart)
+		action "Restarting $DESC: " restart
+		;;
+
+	status)
+		status -p "$PIDFILE" supervisord
+		;;
+
+	*)
+		N=/etc/init.d/$NAME
+		echo "Usage: $N {start|restart|stop|force-stop|reload|force-reload|status}" >&2
+		exit 1
+		;;
+esac
+
+exit 0

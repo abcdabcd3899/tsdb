@@ -1,0 +1,1 @@
+src/backend/storage/file/fd.o src/backend/storage/file/buffile.o src/backend/storage/file/copydir.o src/backend/storage/file/reinit.o src/backend/storage/file/sharedfileset.o src/backend/storage/file/execute_pipe.o src/backend/storage/file/gp_compress.o src/backend/storage/file/mx_compress.o

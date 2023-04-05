@@ -1,0 +1,219 @@
+src/backend/access/sortheap/README
+
+=======================
+Sort Heap Storage
+=======================
+
+Sort heap is a storage which bases on the HEAP and external sort algorithm to
+guarantee that tuples are properly sorted on disk and can be continuously
+merged and compressed. In which order they are sorted is customizable through
+a sortheap_btree type index, which is mandatory for sortheap.
+
+----------------------
+Connections With Heap
+----------------------
+
+By and large, sortheap stores data with heap page as building blocks, in
+which way we can inherit mechanisms such as buffer, block level locking,
+MVCC, and TOAST etc.
+
+Sort heap goes further on adding ordering among heap pages. We simulate the
+concept of "logic tape" internally, which largely resembles "logtape" in
+tuplesort except that it is implemented with BufFile(temporary storage).
+Multiple heap pages compose one logic tape, which logically comprises
+multiple locally sorted RUNs. Physically, blocks of the same logic tape are
+as contigiously arranged as possible.
+
+Additionally, sort heap also offers internal indexing based on sorting key,
+making both building sorted results and point query fast. Meanwhile, we
+have also implemented columnar storage and compression on the basis of
+TOAST.
+
+Sorting Algorithm
+------------------
+
+The algorithm is articulated in 5.2.4D, Knuth's TAOCP volume 3. Briefly
+speaking, it is to sort RUNs, which are already locally sorted, with N-way
+tapes through as fewer merge operations as possible.
+
+Sort heap uses non-volitle storage, data durability guaranteed. Whereas in
+tuplesort, final sorted results are located in memory. Sortheap supports
+continuous sorting and merging. Sortheap introduces MVCC to assure the
+correctness of concurrent insert and merge.
+
+----------------------
+Logical layers
+----------------------
+
+The structure of sortheap is multi-layered. From top to bottom, they are:
+
+--------------------------------------
+|           File      Layer          |
+--------------------------------------
+|           TapeSets  Layer          |
+--------------------------------------
+|           Tape      Layer          |
+--------------------------------------
+|           RUN       Layer          |
+--------------------------------------
+|           BLOCK     Layer          |
+--------------------------------------
+|           HEAPTUPLE Layer          |
+--------------------------------------
+
+Logical TapeSet Layer
+---------------------
+A TapeSet is a set of logical tapes to implement the external sort algorithm
+in 5.2.4D, Knuth's TAOCP volume 3. Tuples are partially sorted in fixed-size
+memory and then be dumped to the tapeset, tapeset choose the proper logical
+tape to store the partially sorted tuples as Logical RUN.
+
+Sort heap now maintains two tapesets, such design is basiclly with regard to
+concurrency. Concurent insert and merge will mess up external sort algorithm,
+therefore 2 tapesets are needed for insert and merge respectively.
+
+However, 5.2.4D algorithm accommodates concurrent insert well, so concurrent
+inserts in the same tapeset are allowed.
+
+Logical Tape Layer
+------------------
+Logical Tape is a set of logical RUNs, one tapeset now can have a maximum of
+150 logical tapes.
+
+Logical Run Layer
+-----------------
+Logical Run is a set of blocks which is linked by pointers in the special
+area of blocks, tuples in a single RUN are guaranteed to be sorted by index
+key, blocks in a single RUN are also put as physically close as possible.
+
+Block Layer
+-----------
+In a sort heap, not only the data are stored in the blocks, other auxiliary
+info like index, freepage, metad are also stored in the blocks.
+
+Tuple Layer
+-----------
+Data in blocks are still organized as heap tuples, therefore sort heap also
+has the ability of MVCC. One difference is that the heap tuples might be
+formatted as compressed column-oriented tuples.
+
+--------------------------------------
+Compression & Column-oriented Store
+--------------------------------------
+
+Sort heap provides an automatic mechanism to convert a bunch of sorted
+tuples from row store format to column store format and compress them.
+
+The conversion might occur WHEN
+
+1) the tuples are sorted and dumped in bunch.
+2) the tuples are merged in bunch.
+
+IF the number of tuples in the same group:
+(NOTE: same group means the same index key value)
+
+1) reaches the maximum of tuples number threadhold (has more tuples in
+the same group)
+2) reachs the minimum of tuples number and minimum of uncompression
+size (has no more tuples in the same group)
+
+It is possible that row-oriented tuples and column-oriented tuples
+are stored in the same table (even in a same block).
+
+The column-oriented tuple is formated as:
+
+| key1 | key2 |...| columnchunk1 | columnchunk2 |...| columnchunkN|
+
+where key1/key2 is the unique key for the group, columnchunk is a
+unit of the columns, it may consist of one column or multiple
+columns which depends on the number of attributes a table has, if a
+table has several hundred or thousand columns, a few columns will
+be combined stored in a single columnchunk, otherwise, a columnchunk
+stores a attribute.
+
+Row-oriented tuples are vertically split into column chunks, we take
+a column chunk with three columns as an example.
+
+the column chunk is firstly constructed to:
+
+|c1, c1, c1 ... c2, c2, c2...c3, c3, c3...|
+
+then be compressed in line.
+finally be toast stored externally if necessary.
+
+A compressed column-oriented tuple is also stored as a HeapTuple, we
+use an obsolete HeapTupleHeader flag (HEAP_HASOID_OLD) to signal if
+it's a column-oriented tuple or a row-oriented tuple.
+
+A compressed column-oriented tuple also has an index tuple, obviously
+the size of index is much smaller and the efficiency of the index is
+also improved dramaticlly (one index search can get a bunch of tuples
+at a time).
+
+------------------------
+INDEX 
+------------------------
+
+Btree like index
+----------------
+Sort Heap build a BTREE like index automatically and internally, a
+sortheap_btree index must be created on the sortheap table before
+any operations because the btree index key also indicates:
+
+1) the underlying sorting/merging keys of the whole table.
+2) the grouping keys to start the columnstore and compression.
+
+We build a brand new btree for each logical tape run which means it
+is a btree forest in general. An index scan on the table is consists
+of multiple smaller index scan on logical tape runs internally. We
+keep merging smaller runs to bigger runs, so the scale of runs is
+kept in a reasonable number.
+
+Another difference is the index tuples are kept in the same file of
+the data, we only use the same search logical with a normal btree. It
+is much more convenient to implement like this because the logical
+tape runs are merged/recycled frequently in the sortheap, if we manage
+or recycle the index tuples in the old way, it will be a disaster.
+
+The third difference is that we always build the btree on a sorted
+tuple sets which makes the index building much faster.
+ 
+Brin like index
+---------------
+Sort Heap builds a BRIN like index automatically and internally, it is
+mainly to make up for the deficiency of the main btree index which has
+poor performance on the secondary/third index scan keys.
+
+Same as the btree index, the brin index tuples are also stored in the
+same file with the data.
+
+We build min/max info for each logical tape run by every 128 blocks by
+default, we also build min/max info for the whole logical tape run to
+filter tuples in a larger granularity.
+
+Because the blocks of logical tape run are not always with a sequential
+block numbers, the format of brin index tuple is also different, the
+ctid of the startup tuple of the blocks range is also recorded in the
+index tuple.
+ 
+-----------------------------------
+FreePage Management
+-----------------------------------
+
+Free pages are managed in a two-layered structure
+
+Each leaf consists of a series of int64 composed of 64 bits, each of which
+indicates whether a particular block is free or not, a single leaf can mark
+about 64000 blocks.
+
+8kb/8b(the size of an int64) = 1000 * int 64 = 1000 * 64 = 64000 blocks.
+
+------------------------------------------------------------------
+                     |----------------|
+                     |      8k        |             freepage root
+                     /----------------\
+---------------------/---|----|-----|---\-------------------------
+                    /    |    |     |    \
+                ｜-｜  ｜-｜ ｜-｜ ｜-｜  ｜-｜     freepage leaf
+                ｜-｜  ｜-｜ ｜-｜ ｜-｜  ｜-｜
+------------------------------------------------------------------

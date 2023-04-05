@@ -1,0 +1,107 @@
+-- start_ignore
+create extension if not exists matrixts;
+NOTICE:  extension "matrixts" already exists, skipping
+create extension if not exists mars;
+NOTICE:  extension "mars" already exists, skipping
+-- end_ignore
+-- on seg0 only.
+select gp_debug_set_create_table_default_numsegments(1);
+ gp_debug_set_create_table_default_numsegments 
+-----------------------------------------------
+ 1
+(1 row)
+
+CREATE TABLE gorilla_with_filter
+(batch int ENCODING (compresstype=zstd), ts timestamp, f1 float ENCODING (compresstype=zstd), f2 float ENCODING (compresstype=lz4))
+USING mars WITH (group_col_ = "{batch}", group_param_col_ = "{ts in 1 day}")
+DISTRIBUTED by (batch);
+\set f1_agg_funcs 'count(*) as f1count, min(f1) as f1min, max(f1) as f1max, avg(f1) as f1avg, sum(f1) as f1sum'
+\set f2_agg_funcs 'count(*) as f2count, min(f2) as f2min, max(f2) as f2max, avg(f2) as f2avg, sum(f2) as f2sum'
+\set select_target 'select :f1_agg_funcs, :f2_agg_funcs from gorilla_with_filter'
+insert into gorilla_with_filter select 1, '2020-10-10 09:01:02'::timestamp + i * interval '10 milliseconds', i/103::float, i/101::float
+ from generate_series(1, 1000000)i;
+insert into gorilla_with_filter select 2, '2020-10-10 09:01:02'::timestamp + i * interval '10 milliseconds', i/103::float, i/101::float
+ from generate_series(1, 1000000)i;
+-- start_ignore
+select pg_size_pretty(pg_total_relation_size('gorilla_with_filter'));
+ pg_size_pretty 
+----------------
+ 313 kB
+(1 row)
+
+-- end_ignore
+select batch, f1, f2 from gorilla_with_filter where batch = 1 limit 10;
+ batch |          f1          |          f2          
+-------+----------------------+----------------------
+     1 | 0.009708737864077669 | 0.009900990099009901
+     1 | 0.019417475728155338 | 0.019801980198019802
+     1 |  0.02912621359223301 |   0.0297029702970297
+     1 | 0.038834951456310676 | 0.039603960396039604
+     1 |  0.04854368932038835 |  0.04950495049504951
+     1 |  0.05825242718446602 |   0.0594059405940594
+     1 |  0.06796116504854369 |  0.06930693069306931
+     1 |  0.07766990291262135 |  0.07920792079207921
+     1 |  0.08737864077669903 |   0.0891089108910891
+     1 |   0.0970873786407767 |  0.09900990099009901
+(10 rows)
+
+-- without footer info;
+set mars.enable_customscan to off;
+:select_target where batch = 1
+UNION ALL
+:select_target where batch = 1 and f2 < 3
+UNION ALL
+:select_target where batch = 1 and f2 < 3 and f2 > 4
+UNION ALL
+:select_target where batch = 1 and f2 > 3 and f2 < 4
+UNION ALL
+:select_target where batch = 1 and f2 > 3 and f2 <> 4
+UNION ALL
+:select_target where batch <> 1 and f2 > 3 and f2 <> 4
+UNION ALL
+:select_target where batch <> 1 and f1 > 10 and f2 > 3 and f2 <> 4
+UNION ALL
+:select_target where batch <> 1 and f1 < 30 and f1 > 10 and f2 > 3 and f2 <> 4;
+ f1count |        f1min         |       f1max        |       f1avg        |       f1sum        | f2count |        f2min         |       f2max        |       f2avg        |       f2sum       
+---------+----------------------+--------------------+--------------------+--------------------+---------+----------------------+--------------------+--------------------+-------------------
+ 1000000 | 0.009708737864077669 |   9708.73786407767 | 4854.3737864077675 |  4854373786.407767 | 1000000 | 0.009900990099009901 |  9900.990099009901 |             4950.5 |        4950500000
+     302 | 0.009708737864077669 | 2.9320388349514563 |  1.470873786407767 | 444.20388349514565 |     302 | 0.009900990099009901 |   2.99009900990099 |                1.5 |               453
+       0 |                      |                    |                    |                    |       0 |                      |                    |                    |                  
+     100 |   2.9514563106796117 |  3.912621359223301 | 3.4320388349514563 | 343.20388349514565 |     100 |     3.00990099009901 |   3.99009900990099 |                3.5 |               350
+  999696 |   2.9514563106796117 |   9708.73786407767 |  4855.849513591938 |  4854373335.339807 |  999696 |     3.00990099009901 |  9900.990099009901 |   4952.00494950465 |        4950499540
+  999696 |   2.9514563106796117 |   9708.73786407767 |  4855.849513591938 |  4854373335.339807 |  999696 |     3.00990099009901 |  9900.990099009901 |   4952.00494950465 |        4950499540
+  998970 |   10.009708737864077 |   9708.73786407767 | 4859.3737864077675 |  4854368631.407767 |  998970 |   10.207920792079207 |  9900.990099009901 |   4955.59900990099 | 4950494742.920792
+    2059 |   10.009708737864077 | 29.990291262135923 |                 20 |              41180 |    2059 |   10.207920792079207 | 30.584158415841586 | 20.396039603960396 | 41995.44554455446
+(8 rows)
+
+-- with footer info;
+-- results of filters which include not equal conditions is wrong.
+-- Marsscan does not support 'not equal' condition yet.
+set mars.enable_customscan to on;
+:select_target where batch = 1
+UNION ALL
+:select_target where batch = 1 and f2 < 3
+UNION ALL
+:select_target where batch = 1 and f2 < 3 and f2 > 4
+UNION ALL
+:select_target where batch = 1 and f2 > 3 and f2 < 4
+UNION ALL
+:select_target where batch = 1 and f2 > 3 and f2 <> 4
+UNION ALL
+:select_target where batch <> 1 and f2 > 3 and f2 <> 4
+UNION ALL
+:select_target where batch <> 1 and f1 > 10 and f2 > 3 and f2 <> 4
+UNION ALL
+:select_target where batch <> 1 and f1 < 30 and f1 > 10 and f2 > 3 and f2 <> 4;
+ f1count |        f1min         |       f1max        |       f1avg        |       f1sum        | f2count |        f2min         |       f2max        |       f2avg        |       f2sum       
+---------+----------------------+--------------------+--------------------+--------------------+---------+----------------------+--------------------+--------------------+-------------------
+ 1000000 | 0.009708737864077669 |   9708.73786407767 | 4854.3737864077675 |  4854373786.407767 | 1000000 | 0.009900990099009901 |  9900.990099009901 |             4950.5 |        4950500000
+     302 | 0.009708737864077669 | 2.9320388349514563 |  1.470873786407767 | 444.20388349514565 |     302 | 0.009900990099009901 |   2.99009900990099 |                1.5 |               453
+       0 |                      |                    |                    |                    |       0 |                      |                    |                    |                  
+     100 |   2.9514563106796117 |  3.912621359223301 | 3.4320388349514563 | 343.20388349514565 |     100 |     3.00990099009901 |   3.99009900990099 |                3.5 |               350
+  999696 |   2.9514563106796117 |   9708.73786407767 |  4855.849513591938 |  4854373335.339807 |  999696 |     3.00990099009901 |  9900.990099009901 |   4952.00494950465 |        4950499540
+  999696 |   2.9514563106796117 |   9708.73786407767 |  4855.849513591938 |  4854373335.339807 |  999696 |     3.00990099009901 |  9900.990099009901 |   4952.00494950465 |        4950499540
+  998970 |   10.009708737864077 |   9708.73786407767 | 4859.3737864077675 |  4854368631.407767 |  998970 |   10.207920792079207 |  9900.990099009901 |   4955.59900990099 | 4950494742.920792
+    2059 |   10.009708737864077 | 29.990291262135923 |                 20 |              41180 |    2059 |   10.207920792079207 | 30.584158415841586 | 20.396039603960396 | 41995.44554455446
+(8 rows)
+

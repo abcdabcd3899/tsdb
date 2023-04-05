@@ -1,0 +1,1479 @@
+-- start_matchsubs
+-- m/[0-9]+_internal_storage_internal_column/
+-- s/[0-9]+_internal_storage_internal_column/###internal_storage_internal_column/
+-- m/[0-9]+_internal_storage/
+-- s/[0-9]+_internal_storage/###_internal_storage /
+-- end_matchsubs
+-- start_ignore
+create extension if not exists matrixts;
+-- end_ignore
+-- 1. coninuous view sanity check
+create table con_view_test_t1(c1 int, c2 int, c3 timestamp);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'c1' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+create table con_view_test_t2(c1 text, c2 int, c3 timestamp);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'c1' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+-- 1.1 positive checks
+-- 1.1.1 support agg 
+begin;
+create view con_view with (continuous)
+as select count(*), c1 from con_view_test_t1 group by c1;
+select count(*) from matrixts_internal.continuous_views;
+ count 
+-------
+     1
+(1 row)
+
+abort;
+-- 1.1.2 support filter
+begin;
+create view con_view with (continuous)
+as select count(*), c1 from con_view_test_t1 where c2 < 100
+group by c1;
+select count(*) from matrixts_internal.continuous_views;
+ count 
+-------
+     1
+(1 row)
+
+abort;
+-- 1.1.3 support plain agg 
+begin;
+create view con_view with (continuous)
+as select count(*) from con_view_test_t1;
+select count(*) from matrixts_internal.continuous_views;
+ count 
+-------
+     1
+(1 row)
+
+abort;
+-- 1.1.4 support multiple agg 
+begin;
+create view con_view with (continuous)
+as select count(*), min(c1), c1, c2 from con_view_test_t1 group by c1, c2;
+select count(*) from matrixts_internal.continuous_views;
+ count 
+-------
+     1
+(1 row)
+
+abort; -- 1.1.5 support filter 
+begin;
+create view con_view with (continuous)
+as select count(*), c1, c2 from con_view_test_t1 where c2 > 10 group by c1, c2;
+select count(*) from matrixts_internal.continuous_views;
+ count 
+-------
+     1
+(1 row)
+
+abort;
+-- 1.1.6 support expression as group key
+begin;
+create view con_view with (continuous)
+as select count(*), time_bucket('1 hour', c3) as hour
+from con_view_test_t1
+group by hour;
+select count(*) from matrixts_internal.continuous_views;
+ count 
+-------
+     1
+(1 row)
+
+abort;
+-- 1.1.8 support expression with aggregate funcs
+begin;
+create view con_view with (continuous)
+as select count(*) + 1 as f1, c1 + 1 as f2, c1 as f3
+from con_view_test_t1 group by c1;
+select count(*) from matrixts_internal.continuous_views;
+ count 
+-------
+     1
+(1 row)
+
+abort;
+-- 1.1.9 support continuous=false
+begin;
+create view con_view with (continuous=false)
+as select count(*), c1, c2 from con_view_test_t1 group by c1, c2;
+select count(*) from matrixts_internal.continuous_views;
+ count 
+-------
+     0
+(1 row)
+
+abort;
+-- 1.1.10 support continuous=true
+begin;
+create view con_view with (continuous=true)
+as select count(*), c1, c2 from con_view_test_t1 group by c1, c2;
+select count(*) from matrixts_internal.continuous_views;
+ count 
+-------
+     1
+(1 row)
+
+abort;
+-- 1.2 negative checks
+-- 1.2.1 disallow distributed key
+begin;
+create view con_view with (continuous)
+as select count(*), c1 from con_view_test_t1 group by c1
+distributed by (c1);
+ERROR:  syntax error at or near "distributed"
+LINE 3: distributed by (c1);
+        ^
+abort;
+-- 1.2.2 disallow cte 
+begin;
+create view con_view with(continuous)
+as
+with w1 as (select count(*) from con_view_test_t1) select * from w1;
+ERROR:  continuous view only supports continuous aggregation
+abort;
+-- 1.2.3 disallow windown function
+begin;
+create view con_view with(continuous)
+as select count(*) over (partition by c1) from con_view_test_t1;
+ERROR:  continuous view disallows orderby/sublink/with/scatter/having/window/limit/groupingsets
+abort;
+-- 1.2.4 disallow join
+begin;
+create view con_view with(continuous)
+as
+select count(*) from con_view_test_t1,con_view_test_t2 
+where con_view_test_t1.c2=con_view_test_t2.c2;
+ERROR:  continuous view disallows multiple target relations
+abort;
+-- 1.2.5 disallow subquery 
+begin;
+create view con_view with(continuous)
+as select count(*) 
+from (select count(*) from con_view_test_t1) as t1;
+ERROR:  continuous view disallows non-relation target (eg: subquery)
+abort;
+-- 1.2.6 disallow sublink
+begin;
+create view con_view with(continuous)
+as select count(*), c1 from con_view_test_t1
+where c2 in (select c2 from con_view_test_t1 where c2=1)
+group by c1; 
+ERROR:  continuous view disallows orderby/sublink/with/scatter/having/window/limit/groupingsets
+abort;
+-- 1.2.7 disallow limit 
+begin;
+create view con_view with(continuous)
+as select count(*), c1 from con_view_test_t1 group by c1 limit 1;
+ERROR:  continuous view disallows orderby/sublink/with/scatter/having/window/limit/groupingsets
+abort;
+-- 1.2.8 disallow groupingsets 
+begin;
+create view con_view with(continuous)
+as select count(*), c1, c2 from con_view_test_t1 
+group by grouping sets ((c1), (c2));
+ERROR:  continuous view disallows orderby/sublink/with/scatter/having/window/limit/groupingsets
+abort;
+-- 1.2.9 disallow having 
+begin;
+create view con_view with(continuous)
+as select count(*), c1 from con_view_test_t1 group by c1 having c1=1;
+ERROR:  continuous view disallows orderby/sublink/with/scatter/having/window/limit/groupingsets
+abort;
+-- 1.2.10 must be agg or sort
+begin;
+create view con_view with(continuous)
+as select c1 from con_view_test_t1;
+ERROR:  continuous view only supports continuous aggregation
+abort;
+-- 1.2.11 disallow order by
+begin;
+create view con_view with(continuous)
+as select c1 from con_view_test_t1 order by c1;
+ERROR:  continuous view disallows orderby/sublink/with/scatter/having/window/limit/groupingsets
+abort;
+-- 1.2.12 group key must be specified within targetlist 
+begin;
+create view con_view with(continuous)
+as select count(*) from con_view_test_t1 group by c1;
+ERROR:  continuous view must have group/sort key specified within targetlist
+abort;
+-- 1.2.13 aggregate must has combinefn
+begin;
+create view con_view with (continuous)
+as select array_agg(c2), c1 
+from con_view_test_t1 group by c1;
+ERROR:  continuous view only supports aggregation functions can be partially aggregated
+abort;
+-- 2. coninuous view result correctness check
+-- 2.1 plain agg
+set sortheap_sort_mem to '64kB';
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage), min(cpu_usage)
+from con_view_result;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view;
+ last |         avg         | max | min 
+------+---------------------+-----+-----
+   37 | 50.1749400000000000 | 100 |   0
+(1 row)
+
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage), min(cpu_usage)
+from con_view_result;
+ last |         avg         | max | min 
+------+---------------------+-----+-----
+   37 | 50.1749400000000000 | 100 |   0
+(1 row)
+
+select avg, max from con_view;
+         avg         | max 
+---------------------+-----
+ 50.1749400000000000 | 100
+(1 row)
+
+select avg + 1, max + 1 from con_view;
+      ?column?       | ?column? 
+---------------------+----------
+ 51.1749400000000000 |      101
+(1 row)
+
+select * from con_view where avg > 50;
+ last |         avg         | max | min 
+------+---------------------+-----+-----
+   37 | 50.1749400000000000 | 100 |   0
+(1 row)
+
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_incr.data';
+select * from con_view;
+ last |         avg         | max | min 
+------+---------------------+-----+-----
+   34 | 50.1350600000000000 | 100 |   0
+(1 row)
+
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage), min(cpu_usage)
+from con_view_result;
+ last |         avg         | max | min 
+------+---------------------+-----+-----
+   34 | 50.1350600000000000 | 100 |   0
+(1 row)
+
+select avg, max from con_view;
+         avg         | max 
+---------------------+-----
+ 50.1350600000000000 | 100
+(1 row)
+
+select avg + 1, max + 1 from con_view;
+      ?column?       | ?column? 
+---------------------+----------
+ 51.1350600000000000 |      101
+(1 row)
+
+select * from con_view where avg > 50;
+ last |         avg         | max | min 
+------+---------------------+-----+-----
+   34 | 50.1350600000000000 | 100 |   0
+(1 row)
+
+drop view con_view cascade;
+drop table con_view_result;
+-- 2.2 group by tag_id
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view order by tag_id;
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:31:58.82613 2021  |       91 | 50.2043681747269891 | 100 |      0
+ Tue Sep 21 17:38:30.377201 2021 |       88 | 49.9311255099592033 | 100 |      1
+ Tue Sep 21 17:39:59.788894 2021 |       37 | 50.0783537317014639 | 100 |      2
+ Tue Sep 21 17:39:35.459011 2021 |       89 | 49.5012600504020161 | 100 |      3
+ Tue Sep 21 17:13:01.646713 2021 |       66 | 50.8727949117964719 | 100 |      4
+ Tue Sep 21 17:16:21.91476 2021  |       32 | 50.4617784711388456 | 100 |      5
+(6 rows)
+
+select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+	   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id order by tag_id;
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:31:58.82613 2021  |       91 | 50.2043681747269891 | 100 |      0
+ Tue Sep 21 17:38:30.377201 2021 |       88 | 49.9311255099592033 | 100 |      1
+ Tue Sep 21 17:39:59.788894 2021 |       37 | 50.0783537317014639 | 100 |      2
+ Tue Sep 21 17:39:35.459011 2021 |       89 | 49.5012600504020161 | 100 |      3
+ Tue Sep 21 17:13:01.646713 2021 |       66 | 50.8727949117964719 | 100 |      4
+ Tue Sep 21 17:16:21.91476 2021  |       32 | 50.4617784711388456 | 100 |      5
+(6 rows)
+
+select avg, max from con_view order by tag_id;
+         avg         | max 
+---------------------+-----
+ 50.2043681747269891 | 100
+ 49.9311255099592033 | 100
+ 50.0783537317014639 | 100
+ 49.5012600504020161 | 100
+ 50.8727949117964719 | 100
+ 50.4617784711388456 | 100
+(6 rows)
+
+select avg + 1, max + 1 from con_view order by tag_id;
+      ?column?       | ?column? 
+---------------------+----------
+ 51.2043681747269891 |      101
+ 50.9311255099592033 |      101
+ 51.0783537317014639 |      101
+ 50.5012600504020161 |      101
+ 51.8727949117964719 |      101
+ 51.4617784711388456 |      101
+(6 rows)
+
+select * from con_view where avg > 50 order by tag_id;
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:31:58.82613 2021  |       91 | 50.2043681747269891 | 100 |      0
+ Tue Sep 21 17:39:59.788894 2021 |       37 | 50.0783537317014639 | 100 |      2
+ Tue Sep 21 17:13:01.646713 2021 |       66 | 50.8727949117964719 | 100 |      4
+ Tue Sep 21 17:16:21.91476 2021  |       32 | 50.4617784711388456 | 100 |      5
+(4 rows)
+
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_incr.data';
+select * from con_view order by tag_id;
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:35:42.103096 2021 |        6 | 49.9841593663746550 | 100 |      0
+ Tue Sep 21 17:45:17.840231 2021 |       34 | 49.9404247660187185 | 100 |      1
+ Tue Sep 21 17:39:59.788894 2021 |       37 | 50.2786777057835373 | 100 |      2
+ Tue Sep 21 17:40:29.377617 2021 |       91 | 49.6458658346333853 | 100 |      3
+ Tue Sep 21 17:42:42.235431 2021 |       28 | 50.6053042121684867 | 100 |      4
+ Tue Sep 21 17:43:26.148514 2021 |       37 | 50.3559342373694948 | 100 |      5
+(6 rows)
+
+select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+	   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id order by tag_id;
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:35:42.103096 2021 |        6 | 49.9841593663746550 | 100 |      0
+ Tue Sep 21 17:45:17.840231 2021 |       34 | 49.9404247660187185 | 100 |      1
+ Tue Sep 21 17:39:59.788894 2021 |       37 | 50.2786777057835373 | 100 |      2
+ Tue Sep 21 17:40:29.377617 2021 |       91 | 49.6458658346333853 | 100 |      3
+ Tue Sep 21 17:42:42.235431 2021 |       28 | 50.6053042121684867 | 100 |      4
+ Tue Sep 21 17:43:26.148514 2021 |       37 | 50.3559342373694948 | 100 |      5
+(6 rows)
+
+select con_view_result.* from con_view, con_view_result
+where con_view.tag_id = con_view_result.tag_id
+and con_view.last_cpu = con_view_result.cpu_usage
+and con_view.last_ts = con_view_result.ts
+order by con_view_result.tag_id; 
+ tag_id |               ts                | cpu_usage 
+--------+---------------------------------+-----------
+      0 | Tue Sep 21 17:35:42.103096 2021 |         6
+      1 | Tue Sep 21 17:45:17.840231 2021 |        34
+      2 | Tue Sep 21 17:39:59.788894 2021 |        37
+      3 | Tue Sep 21 17:40:29.377617 2021 |        91
+      4 | Tue Sep 21 17:42:42.235431 2021 |        28
+      5 | Tue Sep 21 17:43:26.148514 2021 |        37
+(6 rows)
+
+select avg, max from con_view order by tag_id;
+         avg         | max 
+---------------------+-----
+ 49.9841593663746550 | 100
+ 49.9404247660187185 | 100
+ 50.2786777057835373 | 100
+ 49.6458658346333853 | 100
+ 50.6053042121684867 | 100
+ 50.3559342373694948 | 100
+(6 rows)
+
+select avg + 1, max + 1 from con_view order by tag_id;
+      ?column?       | ?column? 
+---------------------+----------
+ 50.9841593663746550 |      101
+ 50.9404247660187185 |      101
+ 51.2786777057835373 |      101
+ 50.6458658346333853 |      101
+ 51.6053042121684867 |      101
+ 51.3559342373694948 |      101
+(6 rows)
+
+select * from con_view where avg > 50 order by tag_id;
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:39:59.788894 2021 |       37 | 50.2786777057835373 | 100 |      2
+ Tue Sep 21 17:42:42.235431 2021 |       28 | 50.6053042121684867 | 100 |      4
+ Tue Sep 21 17:43:26.148514 2021 |       37 | 50.3559342373694948 | 100 |      5
+(3 rows)
+
+drop view con_view cascade;
+drop table con_view_result;
+-- 2.3 group by time_bucket
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month from con_view_result group by month;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view order by month;
+ last |         avg         | max |          month           
+------+---------------------+-----+--------------------------
+   90 | 50.1686659017419422 | 100 | Fri Jun 11 00:00:00 2021
+   50 | 50.2506009615384615 | 100 | Sun Jul 11 00:00:00 2021
+   55 | 49.9740197257637720 | 100 | Tue Aug 10 00:00:00 2021
+   37 | 50.4747375787263821 | 100 | Thu Sep 09 00:00:00 2021
+(4 rows)
+
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month from con_view_result group by month
+order by month;
+ last |         avg         | max |          month           
+------+---------------------+-----+--------------------------
+   90 | 50.1686659017419422 | 100 | Fri Jun 11 00:00:00 2021
+   50 | 50.2506009615384615 | 100 | Sun Jul 11 00:00:00 2021
+   55 | 49.9740197257637720 | 100 | Tue Aug 10 00:00:00 2021
+   37 | 50.4747375787263821 | 100 | Thu Sep 09 00:00:00 2021
+(4 rows)
+
+select avg, max from con_view order by month;
+         avg         | max 
+---------------------+-----
+ 50.1686659017419422 | 100
+ 50.2506009615384615 | 100
+ 49.9740197257637720 | 100
+ 50.4747375787263821 | 100
+(4 rows)
+
+select avg + 1, max + 1 from con_view order by month;
+      ?column?       | ?column? 
+---------------------+----------
+ 51.1686659017419422 |      101
+ 51.2506009615384615 |      101
+ 50.9740197257637720 |      101
+ 51.4747375787263821 |      101
+(4 rows)
+
+select * from con_view where avg > 50 order by month;
+ last |         avg         | max |          month           
+------+---------------------+-----+--------------------------
+   90 | 50.1686659017419422 | 100 | Fri Jun 11 00:00:00 2021
+   50 | 50.2506009615384615 | 100 | Sun Jul 11 00:00:00 2021
+   37 | 50.4747375787263821 | 100 | Thu Sep 09 00:00:00 2021
+(3 rows)
+
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_incr.data';
+select * from con_view order by month;
+ last |         avg         | max |          month           
+------+---------------------+-----+--------------------------
+   16 | 50.3721841843934563 | 100 | Fri Jun 11 00:00:00 2021
+    5 | 50.1515644291866173 | 100 | Sun Jul 11 00:00:00 2021
+   55 | 49.9055788842231554 | 100 | Tue Aug 10 00:00:00 2021
+   34 | 50.3142458100558659 | 100 | Thu Sep 09 00:00:00 2021
+(4 rows)
+
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month from con_view_result group by month
+order by month;
+ last |         avg         | max |          month           
+------+---------------------+-----+--------------------------
+   16 | 50.3721841843934563 | 100 | Fri Jun 11 00:00:00 2021
+    5 | 50.1515644291866173 | 100 | Sun Jul 11 00:00:00 2021
+   55 | 49.9055788842231554 | 100 | Tue Aug 10 00:00:00 2021
+   34 | 50.3142458100558659 | 100 | Thu Sep 09 00:00:00 2021
+(4 rows)
+
+select avg, max from con_view order by month;
+         avg         | max 
+---------------------+-----
+ 50.3721841843934563 | 100
+ 50.1515644291866173 | 100
+ 49.9055788842231554 | 100
+ 50.3142458100558659 | 100
+(4 rows)
+
+select avg + 1, max + 1 from con_view order by month;
+      ?column?       | ?column? 
+---------------------+----------
+ 51.3721841843934563 |      101
+ 51.1515644291866173 |      101
+ 50.9055788842231554 |      101
+ 51.3142458100558659 |      101
+(4 rows)
+
+select * from con_view where avg > 50 order by month;
+ last |         avg         | max |          month           
+------+---------------------+-----+--------------------------
+   16 | 50.3721841843934563 | 100 | Fri Jun 11 00:00:00 2021
+    5 | 50.1515644291866173 | 100 | Sun Jul 11 00:00:00 2021
+   34 | 50.3142458100558659 | 100 | Thu Sep 09 00:00:00 2021
+(3 rows)
+
+drop view con_view cascade;
+drop table con_view_result;
+-- 2.4 group by time_bucket, tag_id
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month, tag_id from con_view_result
+group by month, tag_id;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view order by month, tag_id;
+ last |         avg         | max |          month           | tag_id 
+------+---------------------+-----+--------------------------+--------
+   86 | 50.0535714285714286 | 100 | Fri Jun 11 00:00:00 2021 |      0
+   60 | 49.2930289944478717 | 100 | Fri Jun 11 00:00:00 2021 |      1
+   20 | 50.4740506329113924 | 100 | Fri Jun 11 00:00:00 2021 |      2
+   19 | 50.0975300823305890 | 100 | Fri Jun 11 00:00:00 2021 |      3
+   21 | 51.3020833333333333 | 100 | Fri Jun 11 00:00:00 2021 |      4
+   90 | 49.7828251400124456 | 100 | Fri Jun 11 00:00:00 2021 |      5
+   93 | 50.5542733501622791 | 100 | Sun Jul 11 00:00:00 2021 |      0
+    2 | 50.1420765027322404 | 100 | Sun Jul 11 00:00:00 2021 |      1
+    8 | 50.2324929971988796 | 100 | Sun Jul 11 00:00:00 2021 |      2
+   50 | 49.4265246142542248 | 100 | Sun Jul 11 00:00:00 2021 |      3
+   28 | 50.4130747126436782 | 100 | Sun Jul 11 00:00:00 2021 |      4
+   65 | 50.7210144927536232 | 100 | Sun Jul 11 00:00:00 2021 |      5
+   81 | 49.7152652472031757 | 100 | Tue Aug 10 00:00:00 2021 |      0
+   38 | 49.8700544464609800 | 100 | Tue Aug 10 00:00:00 2021 |      1
+   41 | 49.8597201767304860 | 100 | Tue Aug 10 00:00:00 2021 |      2
+   33 | 49.5269694819020582 | 100 | Tue Aug 10 00:00:00 2021 |      3
+   55 | 51.0171720862257947 | 100 | Tue Aug 10 00:00:00 2021 |      4
+    7 | 49.8746026139173437 | 100 | Tue Aug 10 00:00:00 2021 |      5
+   91 | 50.7133497133497133 | 100 | Thu Sep 09 00:00:00 2021 |      0
+   88 | 50.4451772464962902 | 100 | Thu Sep 09 00:00:00 2021 |      1
+   37 | 49.6793570219966159 | 100 | Thu Sep 09 00:00:00 2021 |      2
+   89 | 48.8336079077429984 | 100 | Thu Sep 09 00:00:00 2021 |      3
+   66 | 51.0288135593220339 | 100 | Thu Sep 09 00:00:00 2021 |      4
+   32 | 52.2572687224669604 | 100 | Thu Sep 09 00:00:00 2021 |      5
+(24 rows)
+
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month, tag_id from con_view_result
+group by month, tag_id order by month, tag_id;
+ last |         avg         | max |          month           | tag_id 
+------+---------------------+-----+--------------------------+--------
+   86 | 50.0535714285714286 | 100 | Fri Jun 11 00:00:00 2021 |      0
+   60 | 49.2930289944478717 | 100 | Fri Jun 11 00:00:00 2021 |      1
+   20 | 50.4740506329113924 | 100 | Fri Jun 11 00:00:00 2021 |      2
+   19 | 50.0975300823305890 | 100 | Fri Jun 11 00:00:00 2021 |      3
+   21 | 51.3020833333333333 | 100 | Fri Jun 11 00:00:00 2021 |      4
+   90 | 49.7828251400124456 | 100 | Fri Jun 11 00:00:00 2021 |      5
+   93 | 50.5542733501622791 | 100 | Sun Jul 11 00:00:00 2021 |      0
+    2 | 50.1420765027322404 | 100 | Sun Jul 11 00:00:00 2021 |      1
+    8 | 50.2324929971988796 | 100 | Sun Jul 11 00:00:00 2021 |      2
+   50 | 49.4265246142542248 | 100 | Sun Jul 11 00:00:00 2021 |      3
+   28 | 50.4130747126436782 | 100 | Sun Jul 11 00:00:00 2021 |      4
+   65 | 50.7210144927536232 | 100 | Sun Jul 11 00:00:00 2021 |      5
+   81 | 49.7152652472031757 | 100 | Tue Aug 10 00:00:00 2021 |      0
+   38 | 49.8700544464609800 | 100 | Tue Aug 10 00:00:00 2021 |      1
+   41 | 49.8597201767304860 | 100 | Tue Aug 10 00:00:00 2021 |      2
+   33 | 49.5269694819020582 | 100 | Tue Aug 10 00:00:00 2021 |      3
+   55 | 51.0171720862257947 | 100 | Tue Aug 10 00:00:00 2021 |      4
+    7 | 49.8746026139173437 | 100 | Tue Aug 10 00:00:00 2021 |      5
+   91 | 50.7133497133497133 | 100 | Thu Sep 09 00:00:00 2021 |      0
+   88 | 50.4451772464962902 | 100 | Thu Sep 09 00:00:00 2021 |      1
+   37 | 49.6793570219966159 | 100 | Thu Sep 09 00:00:00 2021 |      2
+   89 | 48.8336079077429984 | 100 | Thu Sep 09 00:00:00 2021 |      3
+   66 | 51.0288135593220339 | 100 | Thu Sep 09 00:00:00 2021 |      4
+   32 | 52.2572687224669604 | 100 | Thu Sep 09 00:00:00 2021 |      5
+(24 rows)
+
+select avg, max from con_view order by month, tag_id;
+         avg         | max 
+---------------------+-----
+ 50.0535714285714286 | 100
+ 49.2930289944478717 | 100
+ 50.4740506329113924 | 100
+ 50.0975300823305890 | 100
+ 51.3020833333333333 | 100
+ 49.7828251400124456 | 100
+ 50.5542733501622791 | 100
+ 50.1420765027322404 | 100
+ 50.2324929971988796 | 100
+ 49.4265246142542248 | 100
+ 50.4130747126436782 | 100
+ 50.7210144927536232 | 100
+ 49.7152652472031757 | 100
+ 49.8700544464609800 | 100
+ 49.8597201767304860 | 100
+ 49.5269694819020582 | 100
+ 51.0171720862257947 | 100
+ 49.8746026139173437 | 100
+ 50.7133497133497133 | 100
+ 50.4451772464962902 | 100
+ 49.6793570219966159 | 100
+ 48.8336079077429984 | 100
+ 51.0288135593220339 | 100
+ 52.2572687224669604 | 100
+(24 rows)
+
+select avg + 1, max + 1 from con_view order by month, tag_id;
+      ?column?       | ?column? 
+---------------------+----------
+ 51.0535714285714286 |      101
+ 50.2930289944478717 |      101
+ 51.4740506329113924 |      101
+ 51.0975300823305890 |      101
+ 52.3020833333333333 |      101
+ 50.7828251400124456 |      101
+ 51.5542733501622791 |      101
+ 51.1420765027322404 |      101
+ 51.2324929971988796 |      101
+ 50.4265246142542248 |      101
+ 51.4130747126436782 |      101
+ 51.7210144927536232 |      101
+ 50.7152652472031757 |      101
+ 50.8700544464609800 |      101
+ 50.8597201767304860 |      101
+ 50.5269694819020582 |      101
+ 52.0171720862257947 |      101
+ 50.8746026139173437 |      101
+ 51.7133497133497133 |      101
+ 51.4451772464962902 |      101
+ 50.6793570219966159 |      101
+ 49.8336079077429984 |      101
+ 52.0288135593220339 |      101
+ 53.2572687224669604 |      101
+(24 rows)
+
+select * from con_view where avg > 50 order by month, tag_id;
+ last |         avg         | max |          month           | tag_id 
+------+---------------------+-----+--------------------------+--------
+   86 | 50.0535714285714286 | 100 | Fri Jun 11 00:00:00 2021 |      0
+   20 | 50.4740506329113924 | 100 | Fri Jun 11 00:00:00 2021 |      2
+   19 | 50.0975300823305890 | 100 | Fri Jun 11 00:00:00 2021 |      3
+   21 | 51.3020833333333333 | 100 | Fri Jun 11 00:00:00 2021 |      4
+   93 | 50.5542733501622791 | 100 | Sun Jul 11 00:00:00 2021 |      0
+    2 | 50.1420765027322404 | 100 | Sun Jul 11 00:00:00 2021 |      1
+    8 | 50.2324929971988796 | 100 | Sun Jul 11 00:00:00 2021 |      2
+   28 | 50.4130747126436782 | 100 | Sun Jul 11 00:00:00 2021 |      4
+   65 | 50.7210144927536232 | 100 | Sun Jul 11 00:00:00 2021 |      5
+   55 | 51.0171720862257947 | 100 | Tue Aug 10 00:00:00 2021 |      4
+   91 | 50.7133497133497133 | 100 | Thu Sep 09 00:00:00 2021 |      0
+   88 | 50.4451772464962902 | 100 | Thu Sep 09 00:00:00 2021 |      1
+   66 | 51.0288135593220339 | 100 | Thu Sep 09 00:00:00 2021 |      4
+   32 | 52.2572687224669604 | 100 | Thu Sep 09 00:00:00 2021 |      5
+(14 rows)
+
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_incr.data';
+select * from con_view order by month, tag_id;
+ last |         avg         | max |          month           | tag_id 
+------+---------------------+-----+--------------------------+--------
+   74 | 50.6646535282898919 | 100 | Fri Jun 11 00:00:00 2021 |      0
+   60 | 50.2978008552229688 | 100 | Fri Jun 11 00:00:00 2021 |      1
+   20 | 50.6972034715525554 | 100 | Fri Jun 11 00:00:00 2021 |      2
+   19 | 50.1414463204842306 | 100 | Fri Jun 11 00:00:00 2021 |      3
+   11 | 50.1914958702967268 | 100 | Fri Jun 11 00:00:00 2021 |      4
+   16 | 50.2554790231684408 | 100 | Fri Jun 11 00:00:00 2021 |      5
+    5 | 49.9299817184643510 | 100 | Sun Jul 11 00:00:00 2021 |      0
+    2 | 49.8138606676342525 | 100 | Sun Jul 11 00:00:00 2021 |      1
+    8 | 50.4538796861377507 | 100 | Sun Jul 11 00:00:00 2021 |      2
+   50 | 49.4870295944464742 | 100 | Sun Jul 11 00:00:00 2021 |      3
+   61 | 50.5918330635006296 | 100 | Sun Jul 11 00:00:00 2021 |      4
+   23 | 50.6151731720725673 | 100 | Sun Jul 11 00:00:00 2021 |      5
+    2 | 49.3817271589486859 | 100 | Tue Aug 10 00:00:00 2021 |      0
+   48 | 49.6642961342086069 | 100 | Tue Aug 10 00:00:00 2021 |      1
+   31 | 50.2662028560966679 | 100 | Tue Aug 10 00:00:00 2021 |      2
+   33 | 49.7860972122944961 | 100 | Tue Aug 10 00:00:00 2021 |      3
+   55 | 50.7728426395939086 | 100 | Tue Aug 10 00:00:00 2021 |      4
+   64 | 49.5835823519071893 | 100 | Tue Aug 10 00:00:00 2021 |      5
+    6 | 50.6048026048026048 | 100 | Thu Sep 09 00:00:00 2021 |      0
+   34 | 50.3748957464553795 | 100 | Thu Sep 09 00:00:00 2021 |      1
+   37 | 49.3300847457627119 | 100 | Thu Sep 09 00:00:00 2021 |      2
+   91 | 49.0472120472120472 | 100 | Thu Sep 09 00:00:00 2021 |      3
+   28 | 50.8221360895779500 | 100 | Thu Sep 09 00:00:00 2021 |      4
+   37 | 51.7747205503009458 | 100 | Thu Sep 09 00:00:00 2021 |      5
+(24 rows)
+
+select last(cpu_usage, ts), avg(cpu_usage), max(cpu_usage),
+time_bucket('30 day', ts) as month, tag_id from con_view_result
+group by month, tag_id order by month, tag_id;
+ last |         avg         | max |          month           | tag_id 
+------+---------------------+-----+--------------------------+--------
+   74 | 50.6646535282898919 | 100 | Fri Jun 11 00:00:00 2021 |      0
+   60 | 50.2978008552229688 | 100 | Fri Jun 11 00:00:00 2021 |      1
+   20 | 50.6972034715525554 | 100 | Fri Jun 11 00:00:00 2021 |      2
+   19 | 50.1414463204842306 | 100 | Fri Jun 11 00:00:00 2021 |      3
+   11 | 50.1914958702967268 | 100 | Fri Jun 11 00:00:00 2021 |      4
+   16 | 50.2554790231684408 | 100 | Fri Jun 11 00:00:00 2021 |      5
+    5 | 49.9299817184643510 | 100 | Sun Jul 11 00:00:00 2021 |      0
+    2 | 49.8138606676342525 | 100 | Sun Jul 11 00:00:00 2021 |      1
+    8 | 50.4538796861377507 | 100 | Sun Jul 11 00:00:00 2021 |      2
+   50 | 49.4870295944464742 | 100 | Sun Jul 11 00:00:00 2021 |      3
+   61 | 50.5918330635006296 | 100 | Sun Jul 11 00:00:00 2021 |      4
+   23 | 50.6151731720725673 | 100 | Sun Jul 11 00:00:00 2021 |      5
+    2 | 49.3817271589486859 | 100 | Tue Aug 10 00:00:00 2021 |      0
+   48 | 49.6642961342086069 | 100 | Tue Aug 10 00:00:00 2021 |      1
+   31 | 50.2662028560966679 | 100 | Tue Aug 10 00:00:00 2021 |      2
+   33 | 49.7860972122944961 | 100 | Tue Aug 10 00:00:00 2021 |      3
+   55 | 50.7728426395939086 | 100 | Tue Aug 10 00:00:00 2021 |      4
+   64 | 49.5835823519071893 | 100 | Tue Aug 10 00:00:00 2021 |      5
+    6 | 50.6048026048026048 | 100 | Thu Sep 09 00:00:00 2021 |      0
+   34 | 50.3748957464553795 | 100 | Thu Sep 09 00:00:00 2021 |      1
+   37 | 49.3300847457627119 | 100 | Thu Sep 09 00:00:00 2021 |      2
+   91 | 49.0472120472120472 | 100 | Thu Sep 09 00:00:00 2021 |      3
+   28 | 50.8221360895779500 | 100 | Thu Sep 09 00:00:00 2021 |      4
+   37 | 51.7747205503009458 | 100 | Thu Sep 09 00:00:00 2021 |      5
+(24 rows)
+
+select avg, max from con_view order by month, tag_id;
+         avg         | max 
+---------------------+-----
+ 50.6646535282898919 | 100
+ 50.2978008552229688 | 100
+ 50.6972034715525554 | 100
+ 50.1414463204842306 | 100
+ 50.1914958702967268 | 100
+ 50.2554790231684408 | 100
+ 49.9299817184643510 | 100
+ 49.8138606676342525 | 100
+ 50.4538796861377507 | 100
+ 49.4870295944464742 | 100
+ 50.5918330635006296 | 100
+ 50.6151731720725673 | 100
+ 49.3817271589486859 | 100
+ 49.6642961342086069 | 100
+ 50.2662028560966679 | 100
+ 49.7860972122944961 | 100
+ 50.7728426395939086 | 100
+ 49.5835823519071893 | 100
+ 50.6048026048026048 | 100
+ 50.3748957464553795 | 100
+ 49.3300847457627119 | 100
+ 49.0472120472120472 | 100
+ 50.8221360895779500 | 100
+ 51.7747205503009458 | 100
+(24 rows)
+
+select avg + 1, max + 1 from con_view order by month, tag_id;
+      ?column?       | ?column? 
+---------------------+----------
+ 51.6646535282898919 |      101
+ 51.2978008552229688 |      101
+ 51.6972034715525554 |      101
+ 51.1414463204842306 |      101
+ 51.1914958702967268 |      101
+ 51.2554790231684408 |      101
+ 50.9299817184643510 |      101
+ 50.8138606676342525 |      101
+ 51.4538796861377507 |      101
+ 50.4870295944464742 |      101
+ 51.5918330635006296 |      101
+ 51.6151731720725673 |      101
+ 50.3817271589486859 |      101
+ 50.6642961342086069 |      101
+ 51.2662028560966679 |      101
+ 50.7860972122944961 |      101
+ 51.7728426395939086 |      101
+ 50.5835823519071893 |      101
+ 51.6048026048026048 |      101
+ 51.3748957464553795 |      101
+ 50.3300847457627119 |      101
+ 50.0472120472120472 |      101
+ 51.8221360895779500 |      101
+ 52.7747205503009458 |      101
+(24 rows)
+
+select * from con_view where avg > 50 order by month, tag_id;
+ last |         avg         | max |          month           | tag_id 
+------+---------------------+-----+--------------------------+--------
+   74 | 50.6646535282898919 | 100 | Fri Jun 11 00:00:00 2021 |      0
+   60 | 50.2978008552229688 | 100 | Fri Jun 11 00:00:00 2021 |      1
+   20 | 50.6972034715525554 | 100 | Fri Jun 11 00:00:00 2021 |      2
+   19 | 50.1414463204842306 | 100 | Fri Jun 11 00:00:00 2021 |      3
+   11 | 50.1914958702967268 | 100 | Fri Jun 11 00:00:00 2021 |      4
+   16 | 50.2554790231684408 | 100 | Fri Jun 11 00:00:00 2021 |      5
+    8 | 50.4538796861377507 | 100 | Sun Jul 11 00:00:00 2021 |      2
+   61 | 50.5918330635006296 | 100 | Sun Jul 11 00:00:00 2021 |      4
+   23 | 50.6151731720725673 | 100 | Sun Jul 11 00:00:00 2021 |      5
+   31 | 50.2662028560966679 | 100 | Tue Aug 10 00:00:00 2021 |      2
+   55 | 50.7728426395939086 | 100 | Tue Aug 10 00:00:00 2021 |      4
+    6 | 50.6048026048026048 | 100 | Thu Sep 09 00:00:00 2021 |      0
+   34 | 50.3748957464553795 | 100 | Thu Sep 09 00:00:00 2021 |      1
+   28 | 50.8221360895779500 | 100 | Thu Sep 09 00:00:00 2021 |      4
+   37 | 51.7747205503009458 | 100 | Thu Sep 09 00:00:00 2021 |      5
+(15 rows)
+
+drop view con_view cascade;
+drop table con_view_result;
+-- 2.5 filter  
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous) as
+select count(*), tag_id from con_view_result where tag_id < 3 group by tag_id;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view;
+ count | tag_id 
+-------+--------
+  8334 |      2
+  8334 |      1
+  8333 |      0
+(3 rows)
+
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_incr.data';
+select * from con_view;
+ count | tag_id 
+-------+--------
+ 16668 |      2
+ 16668 |      1
+ 16666 |      0
+(3 rows)
+
+drop view con_view cascade;
+drop table con_view_result;
+-- 3. coninuous view drop behavior check
+create table con_view_drop_t1(c1 int);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'c1' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+create view con_view_drop with (continuous) as select count(*) from con_view_drop_t1;
+-- 3.1 drop error
+drop table con_view_drop_t1;
+ERROR:  cannot drop table con_view_drop_t1 because other objects depend on it
+DETAIL:  view con_view_drop depends on table con_view_drop_t1
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+-- 3.2 drop cascade success
+drop table con_view_drop_t1 cascade;
+NOTICE:  drop cascades to view con_view_drop
+-- 3.3 drop success
+create table con_view_drop_t1(c1 int);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'c1' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+create view con_view_drop with (continuous) as select count(*) from con_view_drop_t1;
+drop view con_view_drop cascade;
+drop table con_view_drop_t1;
+-- 4. coninuous view populate behavior check
+create table con_view_pop_t1(c1 int);
+NOTICE:  Table doesn't have 'DISTRIBUTED BY' clause -- Using column named 'c1' as the Greenplum Database data distribution key for this table.
+HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sure column(s) chosen are the optimal data distribution key to minimize skew.
+insert into con_view_pop_t1 select i % 10 from generate_series(1, 100) i;
+-- 4.1 create a continuous view default
+begin;
+create view con_view_pop with (continuous)
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+ count 
+-------
+   100
+(1 row)
+
+abort;
+-- 4.2 create a continous view with explicit "populate"
+-- 4.2.1 create a continous view with explicit "populate"
+begin;
+create view con_view_pop with (continuous, populate)
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+ count 
+-------
+   100
+(1 row)
+
+abort;
+-- 4.2.2 create a continous view with explicit "populate=1"
+begin;
+create view con_view_pop with (continuous, populate=1)
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+ count 
+-------
+   100
+(1 row)
+
+abort;
+-- 4.2.3 create a continous view with explicit "populate=\"true\""
+begin;
+create view con_view_pop with (continuous, populate="true")
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+ count 
+-------
+   100
+(1 row)
+
+abort;
+-- 4.2.4 create a continous view with explicit "populate=\"on\""
+begin;
+create view con_view_pop with (continuous, populate="on")
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+ count 
+-------
+   100
+(1 row)
+
+abort;
+-- 4.3 create a continous view with explicit no "populate"
+-- 4.3.1 create a continous view with explicit "populate=0"
+begin;
+create view con_view_pop with (continuous, populate=0)
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+ count 
+-------
+     0
+(1 row)
+
+abort;
+-- 4.3.2 create a continous view with explicit "populate=\"false\""
+begin;
+create view con_view_pop with (continuous, populate="false")
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+ count 
+-------
+     0
+(1 row)
+
+abort;
+-- 4.3.3 create a continous view with explicit "populate=\"off\""
+begin;
+create view con_view_pop with (continuous, populate="off")
+as select count(*) from con_view_pop_t1;
+select * from con_view_pop;
+ count 
+-------
+     0
+(1 row)
+
+abort;
+--
+-- 5. Transaction test
+--
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+begin;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+abort;
+-- expect no data
+select * from con_view order by tag_id;
+ last_ts | last_cpu | avg | max | tag_id 
+---------+----------+-----+-----+--------
+(0 rows)
+
+drop view con_view cascade;
+drop table con_view_result;
+--
+-- 6. Index test
+--
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+distributed randomly;
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select matrixts_internal.analyze_continuous_view('con_view');
+ analyze_continuous_view 
+-------------------------
+ t
+(1 row)
+
+set enable_bitmapscan to off;
+select * from con_view where tag_id = 0;
+            last_ts             | last_cpu |         avg         | max | tag_id 
+--------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:31:58.82613 2021 |       91 | 50.2043681747269891 | 100 |      0
+(1 row)
+
+select * from con_view where tag_id = 0 or tag_id = 1;
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:31:58.82613 2021  |       91 | 50.2043681747269891 | 100 |      0
+ Tue Sep 21 17:38:30.377201 2021 |       88 | 49.9311255099592033 | 100 |      1
+(2 rows)
+
+select * from con_view where tag_id in (0, 1);
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:31:58.82613 2021  |       91 | 50.2043681747269891 | 100 |      0
+ Tue Sep 21 17:38:30.377201 2021 |       88 | 49.9311255099592033 | 100 |      1
+(2 rows)
+
+set enable_bitmapscan to on;
+select * from con_view where tag_id = 0;
+            last_ts             | last_cpu |         avg         | max | tag_id 
+--------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:31:58.82613 2021 |       91 | 50.2043681747269891 | 100 |      0
+(1 row)
+
+select * from con_view where tag_id = 0 or tag_id = 1;
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:31:58.82613 2021  |       91 | 50.2043681747269891 | 100 |      0
+ Tue Sep 21 17:38:30.377201 2021 |       88 | 49.9311255099592033 | 100 |      1
+(2 rows)
+
+select * from con_view where tag_id in (0, 1);
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:31:58.82613 2021  |       91 | 50.2043681747269891 | 100 |      0
+ Tue Sep 21 17:38:30.377201 2021 |       88 | 49.9311255099592033 | 100 |      1
+(2 rows)
+
+drop view con_view cascade;
+drop table con_view_result;
+--
+-- Test partition table
+--
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+partition by list(tag_id)
+subpartition by list (tag_id)
+subpartition template
+(subpartition p1_1 values (0, 1),
+ subpartition p1_2 values (2),
+ subpartition p2_1 values (3, 4),
+ subpartition p2_2 values (5))
+(partition p1 values (0, 1, 2),
+ partition p2 values (3, 4, 5))
+distributed randomly;
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view;
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:16:21.91476 2021  |       32 | 50.4617784711388456 | 100 |      5
+ Tue Sep 21 17:38:30.377201 2021 |       88 | 49.9311255099592033 | 100 |      1
+ Tue Sep 21 17:31:58.82613 2021  |       91 | 50.2043681747269891 | 100 |      0
+ Tue Sep 21 17:13:01.646713 2021 |       66 | 50.8727949117964719 | 100 |      4
+ Tue Sep 21 17:39:59.788894 2021 |       37 | 50.0783537317014639 | 100 |      2
+ Tue Sep 21 17:39:35.459011 2021 |       89 | 49.5012600504020161 | 100 |      3
+(6 rows)
+
+-- Test helper functions work on partition view
+-- start_ignore
+select matrixts_internal.vacuum_continuous_view('con_view');
+ vacuum_continuous_view 
+------------------------
+ t
+ t
+ t
+(3 rows)
+
+select matrixts_internal.info_continuous_view('con_view');
+                          info_continuous_view                           
+-------------------------------------------------------------------------
+ gp_segment_id: 1, con_view_891603_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 1, con_view_891612_internal_storage,size: 1.757812 MB   +
+ tapesort[0]: status: building runs, totalRuns 21, level 1              +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 1, con_view_891615_internal_storage,size: 1000.000000 KB+
+ tapesort[0]: status: building runs, totalRuns 11, level 1              +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 1, con_view_891618_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 1, con_view_891621_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 1, con_view_891624_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 1, con_view_891627_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 1, con_view_891630_internal_storage,size: 1.757812 MB   +
+ tapesort[0]: status: merged but not vacuumed, totalRuns 21, level 1    +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 1, con_view_891633_internal_storage,size: 1000.000000 KB+
+ tapesort[0]: status: merged but not vacuumed, totalRuns 11, level 1    +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ 
+ gp_segment_id: 0, con_view_891603_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 0, con_view_891612_internal_storage,size: 1.757812 MB   +
+ tapesort[0]: status: building runs, totalRuns 21, level 1              +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 0, con_view_891615_internal_storage,size: 1000.000000 KB+
+ tapesort[0]: status: building runs, totalRuns 11, level 1              +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 0, con_view_891618_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 0, con_view_891621_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 0, con_view_891624_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 0, con_view_891627_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 0, con_view_891630_internal_storage,size: 1.757812 MB   +
+ tapesort[0]: status: merged but not vacuumed, totalRuns 21, level 1    +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 0, con_view_891633_internal_storage,size: 1000.000000 KB+
+ tapesort[0]: status: merged but not vacuumed, totalRuns 11, level 1    +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ 
+ gp_segment_id: 2, con_view_891603_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 2, con_view_891612_internal_storage,size: 1.757812 MB   +
+ tapesort[0]: status: building runs, totalRuns 21, level 1              +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 2, con_view_891615_internal_storage,size: 1000.000000 KB+
+ tapesort[0]: status: building runs, totalRuns 11, level 1              +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 2, con_view_891618_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 2, con_view_891621_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 2, con_view_891624_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 2, con_view_891627_internal_storage,size: 40.000000 KB  +
+ tapesort[0]: status: initial, totalRuns 0, level 0                     +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 2, con_view_891630_internal_storage,size: 1.757812 MB   +
+ tapesort[0]: status: merged but not vacuumed, totalRuns 21, level 1    +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ gp_segment_id: 2, con_view_891633_internal_storage,size: 1000.000000 KB+
+ tapesort[0]: status: merged but not vacuumed, totalRuns 11, level 1    +
+ tapesort[1]: status: initial, totalRuns 0, level 0                     +
+ 
+(3 rows)
+
+-- end_ignore
+select matrixts_internal.rebuild_continuous_view('con_view');
+ rebuild_continuous_view 
+-------------------------
+ t
+(1 row)
+
+select * from con_view;
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:38:30.377201 2021 |       88 | 49.9311255099592033 | 100 |      1
+ Tue Sep 21 17:31:58.82613 2021  |       91 | 50.2043681747269891 | 100 |      0
+ Tue Sep 21 17:16:21.91476 2021  |       32 | 50.4617784711388456 | 100 |      5
+ Tue Sep 21 17:13:01.646713 2021 |       66 | 50.8727949117964719 | 100 |      4
+ Tue Sep 21 17:39:59.788894 2021 |       37 | 50.0783537317014639 | 100 |      2
+ Tue Sep 21 17:39:35.459011 2021 |       89 | 49.5012600504020161 | 100 |      3
+(6 rows)
+
+drop view con_view cascade;
+NOTICE:  trigger "continuous_view_trigger" for relation "con_view_result" does not exist, skipping
+drop table con_view_result;
+--
+-- Multiple continuous view 
+--
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+partition by list(tag_id)
+subpartition by list (tag_id)
+subpartition template
+(subpartition p1_1 values (0, 1),
+ subpartition p1_2 values (2),
+ subpartition p2_1 values (3, 4),
+ subpartition p2_2 values (5))
+(partition p1 values (0, 1, 2),
+ partition p2 values (3, 4, 5))
+distributed randomly;
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+create view con_view_1 with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), time_bucket('30 days', ts) as month
+from con_view_result group by month;
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+copy con_view_result FROM '@abs_srcdir@/data/continuous_view_base.data';
+select * from con_view;
+             last_ts             | last_cpu |         avg         | max | tag_id 
+---------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:38:30.377201 2021 |       88 | 49.9311255099592033 | 100 |      1
+ Tue Sep 21 17:31:58.82613 2021  |       91 | 50.2043681747269891 | 100 |      0
+ Tue Sep 21 17:16:21.91476 2021  |       32 | 50.4617784711388456 | 100 |      5
+ Tue Sep 21 17:13:01.646713 2021 |       66 | 50.8727949117964719 | 100 |      4
+ Tue Sep 21 17:39:59.788894 2021 |       37 | 50.0783537317014639 | 100 |      2
+ Tue Sep 21 17:39:35.459011 2021 |       89 | 49.5012600504020161 | 100 |      3
+(6 rows)
+
+select * from con_view where tag_id = 0;
+            last_ts             | last_cpu |         avg         | max | tag_id 
+--------------------------------+----------+---------------------+-----+--------
+ Tue Sep 21 17:31:58.82613 2021 |       91 | 50.2043681747269891 | 100 |      0
+(1 row)
+
+select * from con_view_1;
+             last_ts             | last_cpu |         avg         | max |          month           
+---------------------------------+----------+---------------------+-----+--------------------------
+ Tue Sep 21 17:39:59.788894 2021 |       37 | 50.4747375787263821 | 100 | Thu Sep 09 00:00:00 2021
+ Mon Aug 09 23:59:43.47136 2021  |       50 | 50.2506009615384615 | 100 | Sun Jul 11 00:00:00 2021
+ Wed Sep 08 23:59:09.286964 2021 |       55 | 49.9740197257637720 | 100 | Tue Aug 10 00:00:00 2021
+ Sat Jul 10 23:56:39.578278 2021 |       90 | 50.1686659017419422 | 100 | Fri Jun 11 00:00:00 2021
+(4 rows)
+
+select * from con_view_1 where month = '2021-08-10 00:00:00'::timestamp;
+             last_ts             | last_cpu |         avg         | max |          month           
+---------------------------------+----------+---------------------+-----+--------------------------
+ Wed Sep 08 23:59:09.286964 2021 |       55 | 49.9740197257637720 | 100 | Tue Aug 10 00:00:00 2021
+(1 row)
+
+-- Test helper functions work on partition view
+drop view con_view cascade;
+drop view con_view_1 cascade;
+NOTICE:  trigger "continuous_view_trigger" for relation "public.con_view_result" does not exist, skipping
+drop table con_view_result;
+-- Test locus of partition view
+create table con_view_result (tag_id int, ts timestamp, cpu_usage int)
+partition by list(tag_id)
+subpartition by list (tag_id)
+subpartition template
+(subpartition p1_1 values (0, 1),
+ subpartition p1_2 values (2),
+ subpartition p2_1 values (3, 4),
+ subpartition p2_2 values (5))
+(partition p1 values (0, 1, 2),
+ partition p2 values (3, 4, 5))
+distributed by (tag_id);
+create view con_view with (continuous)
+as select last(ts, ts) as last_ts, last(cpu_usage, ts) as last_cpu,
+   avg(cpu_usage), max(cpu_usage), tag_id
+from con_view_result group by tag_id;
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+NOTICE:  merging column "internal_column_1" with inherited definition
+NOTICE:  merging column "internal_column_2" with inherited definition
+NOTICE:  merging column "internal_column_3" with inherited definition
+NOTICE:  merging column "internal_column_4" with inherited definition
+NOTICE:  merging column "internal_column_5" with inherited definition
+explain (costs off) select * from con_view;
+                                             QUERY PLAN                                              
+-----------------------------------------------------------------------------------------------------
+ Gather Motion 3:1  (slice1; segments: 3)
+   ->  Finalize HashAggregate
+         Group Key: internal_column_1
+         ->  Custom Scan (continuous_viewscan) on con_view_40136586_internal_storage con_view_result
+               ->  Result
+                     ->  Append
+                           ->  Seq Scan on con_view_40136586_internal_storage
+                           ->  Seq Scan on con_view_40136595_internal_storage
+                           ->  Seq Scan on con_view_40136598_internal_storage
+                           ->  Seq Scan on con_view_40136601_internal_storage
+                           ->  Seq Scan on con_view_40136604_internal_storage
+                           ->  Seq Scan on con_view_40136607_internal_storage
+                           ->  Seq Scan on con_view_40136610_internal_storage
+                           ->  Seq Scan on con_view_40136613_internal_storage
+                           ->  Seq Scan on con_view_40136616_internal_storage
+ Optimizer: Postgres query optimizer
+(16 rows)
+
+set enable_seqscan to off;
+set enable_bitmapscan to off;
+explain (costs off) select * from con_view where tag_id = 0;
+                                                                     QUERY PLAN                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+ Gather Motion 1:1  (slice1; segments: 1)
+   ->  Finalize GroupAggregate
+         Group Key: internal_column_1
+         ->  Custom Scan (continuous_viewscan) on con_view_40136586_internal_storage con_view_result
+               ->  Result
+                     ->  Append
+                           ->  Custom Scan (sortheapscan) on con_view_40136586_internal_storage
+                                 ->  Index Scan using con_view_40136586_internal_storage_internal_column_1_idx on con_view_40136586_internal_storage
+                                       Index Cond: (internal_column_1 = 0)
+                           ->  Custom Scan (sortheapscan) on con_view_40136595_internal_storage
+                                 ->  Index Scan using con_view_40136595_internal_storage_internal_column_1_idx on con_view_40136595_internal_storage
+                                       Index Cond: (internal_column_1 = 0)
+                           ->  Custom Scan (sortheapscan) on con_view_40136598_internal_storage
+                                 ->  Index Scan using con_view_40136598_internal_storage_internal_column_1_idx on con_view_40136598_internal_storage
+                                       Index Cond: (internal_column_1 = 0)
+                           ->  Custom Scan (sortheapscan) on con_view_40136601_internal_storage
+                                 ->  Index Scan using con_view_40136601_internal_storage_internal_column_1_idx on con_view_40136601_internal_storage
+                                       Index Cond: (internal_column_1 = 0)
+                           ->  Custom Scan (sortheapscan) on con_view_40136604_internal_storage
+                                 ->  Index Scan using con_view_40136604_internal_storage_internal_column_1_idx on con_view_40136604_internal_storage
+                                       Index Cond: (internal_column_1 = 0)
+                           ->  Custom Scan (sortheapscan) on con_view_40136607_internal_storage
+                                 ->  Index Scan using con_view_40136607_internal_storage_internal_column_1_idx on con_view_40136607_internal_storage
+                                       Index Cond: (internal_column_1 = 0)
+                           ->  Custom Scan (sortheapscan) on con_view_40136610_internal_storage
+                                 ->  Index Scan using con_view_40136610_internal_storage_internal_column_1_idx on con_view_40136610_internal_storage
+                                       Index Cond: (internal_column_1 = 0)
+                           ->  Custom Scan (sortheapscan) on con_view_40136613_internal_storage
+                                 ->  Index Scan using con_view_40136613_internal_storage_internal_column_1_idx on con_view_40136613_internal_storage
+                                       Index Cond: (internal_column_1 = 0)
+                           ->  Custom Scan (sortheapscan) on con_view_40136616_internal_storage
+                                 ->  Index Scan using con_view_40136616_internal_storage_internal_column_1_idx on con_view_40136616_internal_storage
+                                       Index Cond: (internal_column_1 = 0)
+ Optimizer: Postgres query optimizer
+(34 rows)
+
+reset enable_seqscan;
+reset enable_bitmapscan;
+drop view con_view cascade;
+NOTICE:  trigger "continuous_view_trigger" for relation "public.con_view_result" does not exist, skipping
+drop table con_view_result;

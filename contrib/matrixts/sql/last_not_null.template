@@ -1,0 +1,116 @@
+--
+-- last_not_null() returns null on empty relation
+--
+
+truncate :tname;
+
+select batch
+     , last_not_null(value, ts)
+     , last_not_null_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+
+--
+-- load data
+--
+
+-- a row is ignored when either value or time is null, and last_not_null()
+-- returns null if a group contains only such kind of rows.
+\set batch 10
+insert into :tname values
+  (:batch, null, null)
+, (:batch, 100, null)
+, (:batch, null, 'value 20')
+
+-- last_not_null() returns null if all the values are null
+\set batch 11
+, (:batch, null, 'value 10')
+, (:batch, null, 'value 20')
+, (:batch, null, 'value 30')
+
+-- last_not_null() returns null if all the time are null
+\set batch 12
+, (:batch, 100, null)
+, (:batch, 200, null)
+, (:batch, 300, null)
+
+-- last_not_null() returns non-null when the group contains at least one row
+-- whose value and time are both non-null.
+\set batch 20
+, (:batch, null, null)
+, (:batch, 100, null)
+, (:batch, null, 'value 20')
+, (:batch, 300, 'value 30')
+
+-- last_not_null() does not rely on data order
+\set batch 30
+, (:batch, 300, 'value 30')
+, (:batch, 200, 'value 20')
+, (:batch, 400, 'value 40')
+
+-- end of insert
+;
+
+explain (costs off)
+select batch
+     , last_not_null(value, ts)
+     , last_not_null_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+
+select batch
+     , last_not_null(value, ts)
+     , last_not_null_value(value, ts)
+  from :tname
+ group by batch
+ order by batch
+;
+
+select batch
+     , last_not_null(value, ts)
+     , last_not_null_value(value, ts)
+  from :tname
+ where batch = 10
+ group by batch
+ order by batch
+;
+
+select batch
+     , last_not_null(value, ts)
+     , last_not_null_value(value, ts)
+  from :tname
+ where batch = 11
+ group by batch
+ order by batch
+;
+
+select batch
+     , last_not_null(value, ts)
+     , last_not_null_value(value, ts)
+  from :tname
+ where batch = 12
+ group by batch
+ order by batch
+;
+
+select batch
+     , last_not_null(value, ts)
+     , last_not_null_value(value, ts)
+  from :tname
+ where batch = 20
+ group by batch
+ order by batch
+;
+
+select batch
+     , last_not_null(value, ts)
+     , last_not_null_value(value, ts)
+  from :tname
+ where batch = 30
+ group by batch
+ order by batch
+;

@@ -1,0 +1,1 @@
+src/backend/cdb/dispatcher/cdbconn.o src/backend/cdb/dispatcher/cdbdisp.o src/backend/cdb/dispatcher/cdbdisp_async.o src/backend/cdb/dispatcher/cdbdispatchresult.o src/backend/cdb/dispatcher/cdbdisp_dtx.o src/backend/cdb/dispatcher/cdbdisp_query.o src/backend/cdb/dispatcher/cdbgang.o src/backend/cdb/dispatcher/cdbgang_async.o src/backend/cdb/dispatcher/cdbpq.o
